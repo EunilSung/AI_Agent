@@ -4,6 +4,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.uikit.OnFocusBehavior
 import androidx.compose.ui.window.ComposeUIViewController
 import cafe.adriel.voyager.navigator.Navigator
+import com.eunilsung.aiagent.data.local.IncomingLinks
 import com.eunilsung.aiagent.di.appModule
 import com.eunilsung.aiagent.ui.main.MainScreen
 import org.koin.core.context.startKoin
@@ -21,4 +22,12 @@ fun MainViewController() = ComposeUIViewController(
     }
 ) {
     Navigator(MainScreen)
+}
+
+/**
+ * 앱이 링크(`aiagent://summarize?…` — Talk 의 "AI 요약")로 열렸다. SwiftUI 의 `onOpenURL` 이 부른다.
+ * 앱이 링크로 처음 켜질 때도 화면보다 먼저 와도 되게 받아 두기만 한다.
+ */
+fun handleOpenUrl(url: String) {
+    IncomingLinks.offer(url)
 }

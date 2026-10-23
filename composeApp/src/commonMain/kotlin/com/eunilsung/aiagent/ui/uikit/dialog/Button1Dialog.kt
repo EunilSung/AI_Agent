@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,7 +45,8 @@ fun Button1Dialog(
     onDismissRequest: () -> Unit,
     description: String,
     confirmText: String = stringResource(Res.string.ok),
-    onDismiss: () -> Unit = onDismissRequest
+    onDismiss: () -> Unit = onDismissRequest,
+    title: String? = null,
 ) {
     Dialog(
         onDismissRequest = onDismissRequest
@@ -60,6 +62,17 @@ fun Button1Dialog(
             ) {
 
                 Spacer(Modifier.size(10.dp))
+
+                if (title != null) {
+                    Text(
+                        text = title,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AppColors.Text,
+                        modifier = Modifier.fillMaxWidth().testTag(TestTags.DIALOG_TITLE),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
 
                 val maxContentHeight = with(LocalDensity.current) {
                     (LocalWindowInfo.current.containerSize.height * 0.6f).toDp()

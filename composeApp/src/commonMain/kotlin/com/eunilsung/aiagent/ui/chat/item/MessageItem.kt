@@ -2,10 +2,12 @@ package com.eunilsung.aiagent.ui.chat.item
 
 import aiagent.composeapp.generated.resources.Res
 import aiagent.composeapp.generated.resources.chat_ai_name
+import aiagent.composeapp.generated.resources.chat_answer_cut
 import aiagent.composeapp.generated.resources.chat_answer_failed
 import aiagent.composeapp.generated.resources.chat_search_query
 import aiagent.composeapp.generated.resources.chat_stopped
 import aiagent.composeapp.generated.resources.search_icon
+import aiagent.composeapp.generated.resources.summary_reading
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.eunilsung.aiagent.Config
+import com.eunilsung.aiagent.domain.model.AnswerEvent
 import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.MessageStatus
@@ -179,8 +182,7 @@ private fun AssistantBubble(message: ChatMessage, maxBubbleWidth: Dp, recipientI
         when {
             message.status == MessageStatus.Failed && message.content.isEmpty() ->
                 Text(text = stringResource(Res.string.chat_answer_failed), color = AppColors.Red, fontSize = ChatFontSize)
-            isStreaming && message.content.isEmpty() ->
-                CircularProgressIndicator(modifier = Modifier.padding(vertical = 2.dp).size(18.dp), strokeWidth = 2.dp, color = AppColors.PrimaryMain)
+            isStreaming && message.content.isEmpty() -> ReceivingIndicator(message.progress)
             else -> MarkdownText(
                 text = message.content,
                 color = AppColors.Text,
@@ -191,11 +193,36 @@ private fun AssistantBubble(message: ChatMessage, maxBubbleWidth: Dp, recipientI
     }
 }
 
-/** 답변 아래 — 멈춤 표시, 다시 쓴 검색어, 근거 문서. */
+/** 받는 중이고 아직 글이 없는 답변. 긴 문서를 나눠 읽는 중이면 "문서를 읽는 중이에요 (2/5)" 를 함께 보인다. */
+@Composable
+private fun ReceivingIndicator(progress: AnswerEvent.Progress?) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CircularProgressIndicator(modifier = Modifier.padding(vertical = 2.dp).size(18.dp), strokeWidth = 2.dp, color = AppColors.PrimaryMain)
+        if (progress != null) {
+            Text(
+                text = stringResource(Res.string.summary_reading, progress.done, progress.total),
+                color = AppColors.TextSub,
+                fontSize = 13.sp,
+                modifier = Modifier.testTag(TestTags.CHAT_PROGRESS),
+            )
+        }
+    }
+}
+
+/**
+ * 받다가 끊긴 답변 — 받은 글은 있지만 서버가 끝을 알리기 전에 실패했다. 글만 보면 다 받은 답변과 같아 보이므로
+ * 말풍선 아래에 끊겼다고 적는다.
+ */
+internal fun ChatMessage.isCutOff(): Boolean = status == MessageStatus.Failed && content.isNotEmpty()
+
+/** 답변 아래 — 멈춤·끊김 표시, 다시 쓴 검색어, 근거 문서. */
 @Composable
 private fun AnswerFooter(message: ChatMessage, maxWidth: Dp) {
     if (message.status == MessageStatus.Stopped) {
         Text(text = stringResource(Res.string.chat_stopped), color = AppColors.TextSub, fontSize = 12.sp)
+    }
+    if (message.isCutOff()) {
+        Text(text = stringResource(Res.string.chat_answer_cut), color = AppColors.Red, fontSize = 12.sp)
     }
     if (Config.Chat.IS_SEARCH_QUERY_ENABLED) message.searchQuery?.let { SearchQueryLabel(it, maxWidth) }
     if (Config.Chat.IS_SOURCES_ENABLED && message.sources.isNotEmpty()) SourceChips(message.sources, maxWidth)

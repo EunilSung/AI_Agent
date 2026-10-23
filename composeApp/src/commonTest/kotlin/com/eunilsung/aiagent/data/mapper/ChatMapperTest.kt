@@ -1,5 +1,6 @@
 package com.eunilsung.aiagent.data.mapper
 
+import com.eunilsung.aiagent.domain.model.AnswerFailure
 import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.Person
@@ -41,6 +42,16 @@ class ChatMapperTest {
     fun `보통 질문과 답변은 글 그대로 넘긴다`() {
         val question = ChatMessage("q", "c", ChatRole.User, "반차는 몇 시간이야?", createdAt = 1)
         assertEquals(ChatMessageDto(role = "user", content = "반차는 몇 시간이야?"), mapper.toDto(question))
+    }
+
+    @Test
+    fun `스트림 오류는 code 로만 가리고 message 는 이유를 바꾸지 않는다`() {
+        val internal = "Server error '500 Internal Server Error' for url 'http://localhost:11434/v1/chat/completions'"
+        assertEquals(AnswerFailure.Server(internal), mapper.streamFailure("""{"message":"$internal","code":""}"""))
+        assertEquals(AnswerFailure.Unreachable, mapper.streamFailure("""{"message":"stream interrupted","code":"stream_interrupted"}"""))
+        assertEquals(AnswerFailure.Unreachable, mapper.streamFailure("""{"message":"","code":"stream_interrupted"}"""))
+        assertEquals(AnswerFailure.NoText, mapper.streamFailure("""{"message":"stream interrupted","code":"no_text"}"""))
+        assertEquals(AnswerFailure.Server(""), mapper.streamFailure("oops"))
     }
 
     @Test

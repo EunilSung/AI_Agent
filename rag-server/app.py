@@ -3,24 +3,29 @@
 브릿지 서버만 이 서버를 부른다. 바깥에 열지 않으므로 127.0.0.1 에서만 띄운다.
 
 엔드포인트
-  GET  /v1/health   서버·모델·문서 수 확인
-  POST /v1/ingest   docs/ 폴더의 .md/.txt 를 다시 색인
-  POST /v1/chat     AI Agent 앱의 질문 → 문서 검색 → 답변을 SSE 로 스트리밍 (마크다운, 문서로만 답함)
-                    다른 사람에게 메시지를 보내 달라는 요청이면 답 대신 action 이벤트를 보낸다 — 보내는 일은 앱이 확인을 받고 브릿지가 한다
+  GET  /v1/health     서버·모델·문서 수 확인
+  POST /v1/ingest     docs/ 폴더의 .md/.txt 를 다시 색인
+  POST /v1/chat       AI Agent 앱의 질문 → 문서 검색 → 답변을 SSE 로 스트리밍 (마크다운, 문서로만 답함)
+                      다른 사람에게 메시지를 보내 달라는 요청이면 답 대신 action 이벤트를 보낸다 — 보내는 일은 앱이 확인을 받고 브릿지가 한다
+  POST /v1/summarize  X-File-Name: <퍼센트 인코딩한 파일 이름>, 본문 = Talk 파일 바이트 → 글을 뽑아 요약을 SSE 로 스트리밍
+                      긴 문서는 조각마다 메모하며 progress 를 보낸다 (글 뽑기는 extract.py, 흐름은 summarize.py)
 """
 
 import json
 import os
 import re
 import threading
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import chromadb
 import httpx
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from summarize import NAME_HEADER, Llm, SummaryPrompts, decode_name_header, read_body, sse, summary_stream
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gemma4:26b")
@@ -35,6 +40,8 @@ KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
 
 BASE_DIR = Path(__file__).parent
 DOCS_DIR = BASE_DIR / "docs"
+# 벡터 DB 폴더. 테스트는 임시 폴더를 넣어 실행 중인 서버의 DB 를 건드리지 않는다.
+CHROMA_DIR = os.getenv("CHROMA_DIR", str(BASE_DIR / "chroma_data"))
 
 # 문서에 답이 없을 때 하는 말. 답변 전체가 이 말뿐이면 done 이벤트에 notFound 를 실어, 앞서 보낸 근거를 앱이 지운다.
 NOT_FOUND = "문서에서 찾을 수 없습니다"
@@ -71,6 +78,75 @@ REWRITE_PROMPT = """당신은 사내 문서 검색용 질문을 만드는 도구
 - 이전 대화의 주제(예: 병가, 재택근무, 테스트 기기)를 빠뜨리지 않습니다.
 - 질문에 답하지 말고, 다시 쓴 질문 한 문장만 출력합니다."""
 
+# ---------- 문서 요약 (POST /v1/summarize) ----------
+
+SUMMARY_FORMAT = """[형식] 마크다운
+첫 줄: 문서 전체를 요약한 한 문장 (제목·글머리표·굵은 글씨 없이 문장만)
+
+### 주요 내용
+- 핵심 내용을 글머리표 5~8개로. 하나에 한두 문장
+
+### 핵심 수치·일정
+- 문서에 나온 숫자·금액·비율·날짜·기한·담당자를 글머리표로
+- 문서에 이런 정보가 없으면 이 절은 제목까지 통째로 뺍니다"""
+
+
+def summary_system(source: str) -> str:
+    """요약 시스템 프롬프트. source 는 요약할 글의 이름표([문서] 또는 [메모])."""
+    return f"""당신은 사내 문서를 요약하는 도우미입니다.
+- 항상 자연스러운 한국어로 씁니다. 문서가 영어 등 다른 언어로 되어 있어도 한국어로 요약합니다.
+- {source}에 적힌 내용만 씁니다. 적혀 있지 않은 사실·숫자·이름·평가·전망을 지어내거나 짐작해 덧붙이지 않습니다.
+- 숫자·금액·날짜·이름은 적힌 그대로 옮깁니다. 계산해서 새 숫자를 만들지 않습니다.
+- 문서가 짧으면 글머리표 수를 줄입니다. 개수를 채우려고 같은 말을 되풀이하거나 내용을 늘리지 않습니다.
+- 인사말, "요약입니다" 같은 머리말, 맺음말 없이 아래 형식만 출력합니다.
+
+{SUMMARY_FORMAT}"""
+
+
+SUMMARY_PIECE_PROMPT = """당신은 긴 문서를 여러 조각으로 나눠 읽으며 메모하는 도우미입니다.
+- [문서 조각]의 핵심 내용을 한국어 글머리표 메모로 정리합니다. 많아야 8개, 하나에 한 문장.
+- 숫자·금액·비율·날짜·기한·이름·담당은 빠뜨리지 말고 원문 그대로 옮깁니다.
+- 조각에 없는 내용을 짐작해 덧붙이지 않습니다. 조각이 문장 중간에서 시작하거나 끊겨도 있는 내용만 메모합니다.
+- 인사말·머리말 없이 메모만 출력합니다."""
+
+SUMMARY_CONDENSE_PROMPT = """당신은 긴 문서를 읽으며 적은 메모를 줄이는 도우미입니다.
+- 여러 [메모]를 하나로 합쳐 한국어 글머리표 많아야 12개로 줄입니다. 겹치는 내용은 하나로 합칩니다.
+- 숫자·금액·비율·날짜·기한·이름·담당은 원문 그대로 남깁니다.
+- 메모에 없는 내용을 덧붙이지 않습니다. 인사말·머리말 없이 메모만 출력합니다."""
+
+# 문서가 길어 앞부분만 읽었을 때 요약 끝에 그대로 적게 하는 문장
+SUMMARY_TRUNCATED_NOTE = "※ 문서가 길어 앞부분만 읽고 요약했어요."
+
+
+def summary_whole(name: str, text: str) -> tuple[str, str]:
+    return summary_system("[문서]"), f"[파일 이름] {name}\n\n[문서]\n{text}\n[문서 끝]\n\n위 문서를 [형식]에 맞춰 요약해 주세요."
+
+
+def summary_piece(name: str, number: int, total: int, piece: str) -> tuple[str, str]:
+    return SUMMARY_PIECE_PROMPT, f"[파일 이름] {name}\n[위치] 전체 {total}개 조각 중 {number}번째\n\n[문서 조각]\n{piece}\n[조각 끝]"
+
+
+def summary_condense(name: str, notes: list[str]) -> tuple[str, str]:
+    body = "\n\n".join(f"[메모 {i}]\n{note}" for i, note in enumerate(notes, 1))
+    return SUMMARY_CONDENSE_PROMPT, f"[파일 이름] {name}\n\n{body}"
+
+
+def summary_final(name: str, notes: list[str], truncated: bool) -> tuple[str, str]:
+    system = summary_system("[메모]") + """
+
+[메모]는 긴 문서를 앞에서부터 조각으로 나눠 읽으며 차례로 적은 것입니다. 조각별로 따로 요약하지 말고, 메모 전체를 문서 하나의 요약으로 합칩니다."""
+    if truncated:
+        system += f"""
+문서가 너무 길어 앞부분만 읽었습니다. 요약의 맨 마지막 줄에 다음 문장을 그대로 적습니다: {SUMMARY_TRUNCATED_NOTE}"""
+    body = "\n\n".join(f"[메모 {i}]\n{note}" for i, note in enumerate(notes, 1))
+    return system, f"[파일 이름] {name}\n\n{body}\n\n위 메모로 문서 전체를 [형식]에 맞춰 요약해 주세요."
+
+
+SUMMARY_PROMPTS = SummaryPrompts(whole=summary_whole, piece=summary_piece, condense=summary_condense, final=summary_final)
+SUMMARY_TEMPERATURE = 0.2
+# 조각 메모는 스트리밍하지 않아 한 번에 수십 초 걸린다. 넉넉히 기다린다.
+SUMMARY_TIMEOUT = 300
+
 
 
 def warm_up():
@@ -88,7 +164,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-db = chromadb.PersistentClient(path=str(BASE_DIR / "chroma_data"))
+db = chromadb.PersistentClient(path=CHROMA_DIR)
 collection = db.get_or_create_collection("docs", metadata={"hnsw:space": "cosine"})
 app = FastAPI(title="Local RAG", lifespan=lifespan)
 v1 = APIRouter(prefix="/v1")
@@ -140,7 +216,7 @@ def chunk(text: str, size: int = 250, overlap: int = 60) -> list[str]:
     return chunks
 
 
-async def complete(system: str, user: str, max_tokens: int, temperature: float = 0.3) -> str:
+async def complete(system: str, user: str, max_tokens: int, temperature: float = 0.3, timeout: float = 120) -> str:
     """스트리밍 없이 한 번에 답을 받는다."""
     payload = {
         "model": CHAT_MODEL,
@@ -151,10 +227,34 @@ async def complete(system: str, user: str, max_tokens: int, temperature: float =
     }
     if not THINK:
         payload["reasoning_effort"] = "none"
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         res = await client.post(f"{OLLAMA_URL}/v1/chat/completions", json=payload)
         res.raise_for_status()
         return res.json()["choices"][0]["message"]["content"].strip()
+
+
+async def stream_completion(system: str, user: str, max_tokens: int, temperature: float = 0.3,
+                            timeout: float = 300) -> AsyncIterator[str]:
+    """도구 없이 답을 스트리밍으로 받아 글 조각을 차례로 내놓는다."""
+    payload = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "stream": True,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "keep_alive": KEEP_ALIVE,
+    }
+    if not THINK:
+        payload["reasoning_effort"] = "none"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10)) as client:
+        async with client.stream("POST", f"{OLLAMA_URL}/v1/chat/completions", json=payload) as res:
+            res.raise_for_status()
+            async for line in res.aiter_lines():
+                if not line.startswith("data: ") or line == "data: [DONE]":
+                    continue
+                content = json.loads(line[6:])["choices"][0]["delta"].get("content")
+                if content:
+                    yield content
 
 
 async def rewrite_query(messages: list[Message]) -> str:
@@ -255,11 +355,6 @@ def ingest():
     return {"files": len({m["source"] for m in metas}), "chunks": len(texts)}
 
 
-def sse(data: dict, event: str | None = None) -> str:
-    head = f"event: {event}\n" if event else ""
-    return f"{head}data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
 # 터널·프록시가 스트리밍을 모아 두지 않게 한다
 STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
@@ -317,6 +412,30 @@ async def chat(req: ChatRequest):
         yield sse({"notFound": True} if not calls and is_not_found(answer) else {}, event="done")
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers=STREAM_HEADERS)
+
+
+async def summary_complete(system: str, user: str, max_tokens: int) -> str:
+    return await complete(system, user, max_tokens, SUMMARY_TEMPERATURE, timeout=SUMMARY_TIMEOUT)
+
+
+def summary_stream_llm(system: str, user: str, max_tokens: int) -> AsyncIterator[str]:
+    return stream_completion(system, user, max_tokens, SUMMARY_TEMPERATURE, timeout=SUMMARY_TIMEOUT)
+
+
+@v1.post("/summarize")
+async def summarize(request: Request, encoded_name: str = Header(alias=NAME_HEADER, min_length=1)):
+    """본문(파일 바이트)을 요약한다. 형식은 NAME_HEADER 헤더에 퍼센트 인코딩해 실은 파일 이름의 확장자로 가린다.
+
+    이름을 URL 쿼리로 받지 않는다 — 요청 줄은 uvicorn 접근 로그에 남는다. 헤더가 없거나 잘못 인코딩됐으면 422,
+    그 밖의 실패는 SSE(error → done)로 알린다.
+    """
+    name = decode_name_header(encoded_name)
+    if name is None:
+        raise HTTPException(status_code=422, detail=f"{NAME_HEADER} must be percent-encoded UTF-8")
+    data = await read_body(request.stream())
+    llm = Llm(complete=summary_complete, stream=summary_stream_llm)
+    return StreamingResponse(summary_stream(name, data, llm, SUMMARY_PROMPTS), media_type="text/event-stream",
+                             headers=STREAM_HEADERS)
 
 
 app.include_router(v1)

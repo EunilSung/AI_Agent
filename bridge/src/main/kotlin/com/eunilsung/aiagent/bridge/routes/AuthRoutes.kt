@@ -24,7 +24,7 @@ fun Route.authRoutes(talk: TalkClient, verifier: TokenVerifier) {
     post("/v1/auth/login") {
         val request = runCatching { call.receive<LoginRequest>() }.getOrNull()
         if (request == null || request.id.isBlank() || request.password.isBlank()) {
-            call.respond(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST, "아이디와 비밀번호가 필요합니다"))
+            call.respondError(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST, "아이디와 비밀번호가 필요합니다"))
             return@post
         }
         when (val result = talk.login(request)) {
@@ -35,13 +35,13 @@ fun Route.authRoutes(talk: TalkClient, verifier: TokenVerifier) {
             is TalkResult.Rejected -> when (result.status) {
                 HttpStatusCode.TooManyRequests.value -> {
                     result.retryAfter?.let { call.response.header(HttpHeaders.RetryAfter, it) }
-                    call.respond(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.TOO_MANY_ATTEMPTS))
+                    call.respondError(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.TOO_MANY_ATTEMPTS))
                 }
                 HttpStatusCode.Unauthorized.value ->
-                    call.respond(HttpStatusCode.Unauthorized, ApiError(ErrorCode.INVALID_CREDENTIALS))
-                else -> call.respond(HttpStatusCode.fromValue(result.status), ApiError(ErrorCode.FAILED))
+                    call.respondError(HttpStatusCode.Unauthorized, ApiError(ErrorCode.INVALID_CREDENTIALS))
+                else -> call.respondError(HttpStatusCode.fromValue(result.status), ApiError(ErrorCode.FAILED))
             }
-            TalkResult.Unreachable -> call.respond(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
+            TalkResult.Unreachable -> call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
         }
     }
 
@@ -67,17 +67,17 @@ fun ApplicationCall.bearerToken(): String? =
 suspend fun ApplicationCall.requireUser(verifier: TokenVerifier): UserDto? {
     val token = bearerToken()
     if (token == null) {
-        respond(HttpStatusCode.Unauthorized, ApiError(ErrorCode.UNAUTHORIZED))
+        respondError(HttpStatusCode.Unauthorized, ApiError(ErrorCode.UNAUTHORIZED))
         return null
     }
     return when (val verification = verifier.verify(token)) {
         is Verification.Valid -> verification.user
         Verification.Invalid -> {
-            respond(HttpStatusCode.Unauthorized, ApiError(ErrorCode.UNAUTHORIZED))
+            respondError(HttpStatusCode.Unauthorized, ApiError(ErrorCode.UNAUTHORIZED))
             null
         }
         Verification.Unknown -> {
-            respond(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
+            respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
             null
         }
     }

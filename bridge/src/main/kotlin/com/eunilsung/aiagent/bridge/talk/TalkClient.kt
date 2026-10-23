@@ -1,23 +1,34 @@
 package com.eunilsung.aiagent.bridge.talk
 
+import com.eunilsung.aiagent.bridge.http.networkBody
 import com.eunilsung.aiagent.shared.api.ApiError
+import com.eunilsung.aiagent.shared.api.ErrorCode
 import com.eunilsung.aiagent.shared.api.LoginRequest
 import com.eunilsung.aiagent.shared.api.LoginResponse
+import com.eunilsung.aiagent.shared.api.MAX_SUMMARY_FILE_BYTES
 import com.eunilsung.aiagent.shared.api.TalkPersonDto
 import com.eunilsung.aiagent.shared.api.UserDto
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentLength
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayOutputStream
 
 /**
  * Talk 서버를 부른다. 계정과 토큰은 Talk 서버가 정본이라, 브릿지는 로그인을 넘기고 토큰이 살아 있는지 묻기만 한다.
@@ -75,6 +86,34 @@ class TalkClient(
         { },
     )
 
+    /**
+     * 대화로 올라온 파일 하나를 받는다. Talk 서버는 그 파일이 있는 방의 사람에게만 내주고, 파일이 없거나 그 방 사람이
+     * 아니면 404 `file_not_found` 로 거절한다. 토큰이 죽었으면 401 이다.
+     *
+     * 받은 파일은 메모리에 올리므로 [maxBytes] 를 넘으면 끝까지 읽지 않고 413 `file_too_large` 거절로 돌려준다 —
+     * Talk 서버가 큰 파일 올리기를 거절할 때와 같은 상태·코드다. Content-Length 로 먼저 보고, 없으면 읽으면서 센다.
+     *
+     * 본문이 중간에 끊겼거나(Talk 재시작·네트워크 끊김) Content-Length 보다 짧으면 [TalkResult.Unreachable] 이다.
+     * 잘린 파일을 요약하면 앱에는 앞부분만 읽은 요약이 정상 요약처럼 보이거나, 멀쩡한 파일이 깨진 파일로 안내된다.
+     */
+    suspend fun downloadFile(token: String, fileId: String, maxBytes: Long = MAX_SUMMARY_FILE_BYTES): TalkResult<ByteArray> =
+        try {
+            http.prepareGet("$baseUrl/files/${fileId.encodeURLPathPart()}") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }.execute { response ->
+                val declared = response.contentLength()
+                when {
+                    !response.status.isSuccess() -> rejected(response, response.bodyAsText())
+                    declared != null && declared > maxBytes -> FILE_TOO_LARGE
+                    else -> response.networkBody().readUpTo(maxBytes, declared)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TalkResult.Unreachable
+        }
+
     /** Talk 서버의 요청·응답 모양 중 브릿지가 쓰는 칸만 옮겨 왔다. Talk 의 `:shared` 와 이름을 맞춘다. */
     @Serializable
     private data class PeopleJson(val users: List<TalkPersonDto> = emptyList())
@@ -94,9 +133,39 @@ class TalkClient(
         return if (response.status.isSuccess()) {
             runCatching { TalkResult.Success(decode(body)) }.getOrElse { TalkResult.Unreachable }
         } else {
-            val error = runCatching { json.decodeFromString(ApiError.serializer(), body) }.getOrNull()
-            TalkResult.Rejected(response.status.value, error?.code.orEmpty(), response.headers[HttpHeaders.RetryAfter])
+            rejected(response, body)
         }
+    }
+
+    private fun rejected(response: HttpResponse, body: String): TalkResult.Rejected {
+        val error = runCatching { json.decodeFromString(ApiError.serializer(), body) }.getOrNull()
+        return TalkResult.Rejected(response.status.value, error?.code.orEmpty(), response.headers[HttpHeaders.RetryAfter])
+    }
+
+    /**
+     * 본문을 끝까지 읽는다. [limit] 를 넘는 순간 더 읽지 않고 413 거절을 돌려준다. [expected] 는 Content-Length 다.
+     *
+     * 오류로 닫힌 채널에서도 `readAvailable` 은 예외 없이 -1 을 돌려줄 때가 있다(이미 닫혔으면 -1, 기다리던 중에 닫히면
+     * 예외). 그래서 -1 을 받으면 닫힌 이유를 보고, 있으면 그 예외를 던져 어느 쪽이든 같은 길([TalkResult.Unreachable])로 간다.
+     * 받은 크기가 Content-Length 와 다를 때도 끝까지 받지 못한 것이다.
+     */
+    private suspend fun ByteReadChannel.readUpTo(limit: Long, expected: Long?): TalkResult<ByteArray> {
+        val out = ByteArrayOutputStream((expected ?: READ_BUFFER_BYTES.toLong()).coerceIn(0L, limit).toInt())
+        val buffer = ByteArray(READ_BUFFER_BYTES)
+        while (true) {
+            val read = readAvailable(buffer)
+            if (read == -1) break
+            if (out.size().toLong() + read > limit) return FILE_TOO_LARGE
+            out.write(buffer, 0, read)
+        }
+        closedCause?.let { throw it }
+        if (expected != null && out.size().toLong() != expected) return TalkResult.Unreachable
+        return TalkResult.Success(out.toByteArray())
+    }
+
+    private companion object {
+        val FILE_TOO_LARGE = TalkResult.Rejected(HttpStatusCode.PayloadTooLarge.value, ErrorCode.FILE_TOO_LARGE)
+        const val READ_BUFFER_BYTES = 64 * 1024
     }
 }
 

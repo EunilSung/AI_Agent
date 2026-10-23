@@ -9,6 +9,7 @@ import com.eunilsung.aiagent.shared.api.LoginResponse
 import com.eunilsung.aiagent.shared.api.PeopleResponse
 import com.eunilsung.aiagent.shared.api.SendTalkMessageRequest
 import com.eunilsung.aiagent.shared.api.SendTalkMessageResponse
+import com.eunilsung.aiagent.shared.api.SummarizeRequest
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
@@ -44,7 +45,7 @@ sealed interface ServerResult<out T> {
     data object Unreachable : ServerResult<Nothing>
 }
 
-/** SSE 대화를 브릿지가 열지 않고 거절했다. */
+/** SSE 대화·요약을 브릿지가 열지 않고 거절했다. [code] 는 [com.eunilsung.aiagent.shared.api.ErrorCode] 중 하나다. */
 class ChatRejectedException(val status: Int, val code: String) : Exception("chat rejected: $status $code")
 
 /** 브릿지 REST·SSE 클라이언트. 주소는 부를 때마다 [urlStore] 에서 읽어, 설정에서 바꾸면 바로 반영된다. */
@@ -79,17 +80,28 @@ class BridgeClient(
      * iOS(Darwin) 엔진은 응답 본문을 엔진의 문맥에서 읽어, `flow {}` 로 내보내면 Flow 규칙(같은 문맥에서만 emit)을 어긴다.
      * 그래서 어느 문맥에서든 보낼 수 있는 [channelFlow] 를 쓴다.
      */
-    fun chat(token: String, request: ChatRequest): Flow<SseEvent> = channelFlow {
-        http.preparePost("$baseUrl/v1/chat") {
+    fun chat(token: String, request: ChatRequest): Flow<SseEvent> =
+        stream(token, "/v1/chat", json.encodeToString(ChatRequest.serializer(), request))
+
+    /**
+     * Talk 파일 요약을 열어 SSE 이벤트를 하나씩 내보낸다. 모양은 [chat] 과 같다.
+     *
+     * 브릿지가 Talk 에서 파일을 받지 못하면 열지 않고 거절한다([ChatRejectedException] — 404 file_not_found, 413 file_too_large).
+     */
+    fun summarize(token: String, request: SummarizeRequest): Flow<SseEvent> =
+        stream(token, "/v1/summarize", json.encodeToString(SummarizeRequest.serializer(), request))
+
+    private fun stream(token: String, path: String, body: String): Flow<SseEvent> = channelFlow {
+        http.preparePost("$baseUrl$path") {
             bearer(token)
             header(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
-            jsonBody(json.encodeToString(ChatRequest.serializer(), request))
+            jsonBody(body)
         }.execute { response ->
             if (!response.status.isSuccess()) throw ChatRejectedException(response.status.value, response.errorCode())
-            val body = response.bodyAsChannel()
+            val channel = response.bodyAsChannel()
             val parser = SseParser()
             while (true) {
-                val line = body.readLine() ?: break
+                val line = channel.readLine() ?: break
                 parser.feed(line)?.let { send(it) }
             }
             parser.finish()?.let { send(it) }

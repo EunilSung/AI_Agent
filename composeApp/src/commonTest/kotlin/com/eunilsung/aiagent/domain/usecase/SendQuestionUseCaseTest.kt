@@ -15,6 +15,7 @@ import com.eunilsung.aiagent.domain.model.User
 import com.eunilsung.aiagent.domain.repository.AssistantRepository
 import com.eunilsung.aiagent.domain.repository.MessengerRepository
 import com.eunilsung.aiagent.testsupport.createTestDatabase
+import com.eunilsung.aiagent.testsupport.sseAssistant
 import com.russhwolf.settings.MapSettings
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -43,6 +44,8 @@ class SendQuestionUseCaseTest {
             asked += history
             return answer(history)
         }
+
+        override fun summarize(fileId: String, fileName: String): Flow<AnswerEvent> = error("요약은 쓰지 않는다")
     }
 
     /** Talk 대역 — 이서연은 test2 하나, 이서는 둘(이서연·이서윤)이다. 보낸 것을 [sent] 에 남긴다. */
@@ -141,6 +144,36 @@ class SendQuestionUseCaseTest {
         val reply = conversations.messages(id).last()
         assertEquals("받은 데까지", reply.content)
         assertEquals(MessageStatus.Stopped, reply.status)
+    }
+
+    @Test
+    fun `서버가 끝을 알리기 전에 끊긴 답변은 받은 데까지 실패로 남기고 다음 질문의 기록에서 뺀다`() = runTest(UnconfinedTestDispatcher()) {
+        val conversations = conversations()
+        val id = conversations.create().id
+        val cut = sseAssistant(": connected\n\ndata: {\"delta\": \"반차는 4시간\"}\n\ndata: {\"delta\": \"이고\"}\n\n")
+
+        assertEquals(AnswerFailure.Unreachable, SendQuestionUseCase(conversations, cut, FakeMessenger())(id, "반차는 몇 시간이야?"))
+
+        val reply = conversations.messages(id).last()
+        assertEquals("반차는 4시간이고", reply.content)
+        assertEquals(MessageStatus.Failed, reply.status)
+
+        val next = FakeAssistant { flow { emit(AnswerEvent.Delta("네")) } }
+        SendQuestionUseCase(conversations, next, FakeMessenger())(id, "오전 반차도 같아?")
+        assertEquals(listOf("반차는 몇 시간이야?", "오전 반차도 같아?"), next.asked.single().map { it.content })
+    }
+
+    @Test
+    fun `서버가 끝을 알리면 다 받은 답변으로 저장한다`() = runTest(UnconfinedTestDispatcher()) {
+        val conversations = conversations()
+        val id = conversations.create().id
+        val complete = sseAssistant("data: {\"delta\": \"4시간입니다.\"}\n\nevent: done\ndata: {}\n\n")
+
+        assertNull(SendQuestionUseCase(conversations, complete, FakeMessenger())(id, "반차는 몇 시간이야?"))
+
+        val reply = conversations.messages(id).last()
+        assertEquals("4시간입니다.", reply.content)
+        assertEquals(MessageStatus.Done, reply.status)
     }
 
     @Test

@@ -32,7 +32,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import androidx.compose.ui.platform.testTag
 import com.eunilsung.aiagent.ui.theme.AppColors
+import com.eunilsung.aiagent.ui.uikit.TestTags
 
 @Preview(showBackground = true)
 @Composable
@@ -47,6 +49,10 @@ fun ToastMessagePreview() {
     }
 }
 
+/**
+ * 화면 아래에 잠깐 떴다 사라지는 안내. Talk 의 ToastMessage 와 같고, 화면 자동화가 찾도록 글에
+ * [TestTags.TOAST_MESSAGE] 를 붙인 것만 다르다.
+ */
 @Composable
 fun ToastMessage(
     message: String,
@@ -105,7 +111,8 @@ fun ToastMessage(
                             fontWeight = FontWeight.Medium,
                             letterSpacing = (-0.3).sp
                         ),
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.testTag(TestTags.TOAST_MESSAGE),
                     )
                 }
             }

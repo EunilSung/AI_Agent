@@ -11,10 +11,17 @@ import aiagent.composeapp.generated.resources.chat_suggestion_title
 import aiagent.composeapp.generated.resources.conversation_untitled
 import aiagent.composeapp.generated.resources.move_to_last_chat_icon
 import aiagent.composeapp.generated.resources.send_failed
+import aiagent.composeapp.generated.resources.summary_question
 import aiagent.composeapp.generated.resources.toast_chat_rate_limited
 import aiagent.composeapp.generated.resources.toast_chat_server
 import aiagent.composeapp.generated.resources.toast_chat_unreachable
 import aiagent.composeapp.generated.resources.toast_session_expired
+import aiagent.composeapp.generated.resources.toast_summary_broken
+import aiagent.composeapp.generated.resources.toast_summary_encrypted
+import aiagent.composeapp.generated.resources.toast_summary_no_text
+import aiagent.composeapp.generated.resources.toast_summary_not_found
+import aiagent.composeapp.generated.resources.toast_summary_too_large
+import aiagent.composeapp.generated.resources.toast_summary_unsupported
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -74,6 +81,7 @@ import com.eunilsung.aiagent.ui.uikit.topbar.NavIconButton
 import com.eunilsung.aiagent.ui.uikit.topbar.TopBarV1
 import com.eunilsung.aiagent.ui.util.chatDateHeaderText
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
@@ -96,18 +104,37 @@ class ChatScreen(val conversationId: String) : Screen {
                 val message = when (event) {
                     ChatEvent.SessionExpired -> getString(Res.string.toast_session_expired)
                     ChatEvent.SendFailed -> getString(Res.string.send_failed)
-                    is ChatEvent.AnswerFailed -> when (val failure = event.failure) {
-                        AnswerFailure.RateLimited -> getString(Res.string.toast_chat_rate_limited)
-                        is AnswerFailure.Server -> getString(Res.string.toast_chat_server, failure.reason)
-                        else -> getString(Res.string.toast_chat_unreachable)
+                    is ChatEvent.AnswerFailed -> getString(event.failure.toastText())
+                    is ChatEvent.SummaryRequested -> {
+                        viewModel.onAction(
+                            ChatActions.OnSummarize(event.request, getString(Res.string.summary_question, event.request.fileName))
+                        )
+                        null
                     }
                 }
-                toast.show(message)
+                message?.let { toast.show(it) }
             }
         }
 
         ChatContent(uiState = uiState, onAction = viewModel::onAction, onBack = { rightNavigator.popToEmptyRoot() })
     }
+}
+
+/**
+ * 답변·요약을 받지 못한 이유를 알리는 토스트 문구. 이유마다 정해진 문구(ko/en)만 쓴다 — 서버가 준 설명
+ * ([AnswerFailure.Server.reason])은 기록용이라 화면에 넣지 않는다.
+ */
+internal fun AnswerFailure.toastText(): StringResource = when (this) {
+    AnswerFailure.RateLimited -> Res.string.toast_chat_rate_limited
+    is AnswerFailure.Server -> Res.string.toast_chat_server
+    AnswerFailure.UnsupportedFile -> Res.string.toast_summary_unsupported
+    AnswerFailure.NoText -> Res.string.toast_summary_no_text
+    AnswerFailure.EncryptedFile -> Res.string.toast_summary_encrypted
+    AnswerFailure.BrokenFile -> Res.string.toast_summary_broken
+    AnswerFailure.FileNotFound -> Res.string.toast_summary_not_found
+    AnswerFailure.FileTooLarge -> Res.string.toast_summary_too_large
+    AnswerFailure.SessionExpired -> Res.string.toast_session_expired
+    AnswerFailure.Unreachable -> Res.string.toast_chat_unreachable
 }
 
 /**

@@ -23,6 +23,8 @@ object TestTags {
     /** 다 받은 AI 답변 말풍선. 받는 중에는 붙지 않는다. */
     const val CHAT_ANSWER = "chat_answer"
     const val CHAT_SOURCE = "chat_source"
+    /** 받는 중인 요약의 "문서를 읽는 중이에요 (2/5)". 긴 문서만 보인다. */
+    const val CHAT_PROGRESS = "chat_progress"
 
     /** AI 가 정한 Talk 메시지 보내기 카드. */
     const val SEND_CARD = "send_card"
@@ -35,6 +37,11 @@ object TestTags {
     const val SETTING_STATUS_BRIDGE = "setting_status_bridge"
 
     const val DIALOG_CONFIRM = "dialog_confirm"
+    /** 제목이 있는 알림의 제목 — Talk 요약 링크의 로그인 안내. */
+    const val DIALOG_TITLE = "dialog_title"
+
+    /** 화면 아래에 잠깐(2초) 떴다 사라지는 토스트의 글 — 요약 취소 안내 등. */
+    const val TOAST_MESSAGE = "toast_message"
 
     /** 하단 탭. [key] 는 탭의 상태 보존 키(chat·setting)다. */
     fun tab(key: String): String = "tab_$key"

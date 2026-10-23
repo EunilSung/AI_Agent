@@ -32,6 +32,8 @@ class ObserveMessagesUseCase(private val repository: ConversationRepository) {
  * 질문은 바로 저장한다. 답변은 받는 동안 화면에만 그리고([MessageStatus.Streaming]), 끝나면 저장한다.
  * Talk 의 대화 전송이 '전송 중'으로 먼저 보이고 결과에 따라 완료·실패로 바뀌는 것과 같은 모양이다.
  * 사용자가 멈추면(코루틴 취소) 받은 데까지 남기고 [MessageStatus.Stopped] 로 저장한다.
+ * 서버가 끝을 알리기 전에 끊기면([AnswerFailure.Unreachable]) 받은 데까지 [MessageStatus.Failed] 로 저장한다 —
+ * 잘린 답변은 다 받은 것이 아니라서 다음 질문의 대화 기록에도 넣지 않는다.
  */
 class SendQuestionUseCase(
     private val conversations: ConversationRepository,
@@ -72,6 +74,7 @@ class SendQuestionUseCase(
                         ),
                     )
                     AnswerEvent.NotFound -> reply.copy(sources = emptyList(), searchQuery = null)
+                    is AnswerEvent.Progress -> reply
                 }
                 conversations.upsertMessage(reply, persist = false)
             }
@@ -129,4 +132,6 @@ data class ChatUseCases(
     val confirmSend: ConfirmSendUseCase,
     val cancelSend: CancelSendUseCase,
     val logout: LogoutUseCase,
+    val takeHeldSummaries: TakeHeldSummariesUseCase,
+    val summarizeFile: SummarizeFileUseCase,
 )

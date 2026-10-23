@@ -10,15 +10,18 @@ import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.Source
 import com.eunilsung.aiagent.domain.model.User
+import com.eunilsung.aiagent.shared.api.SummarizeRequest
 import com.russhwolf.settings.MapSettings
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,6 +36,7 @@ class AssistantRepositoryImplTest {
         val requests = mutableListOf<String>()
         val engine = MockEngine { request ->
             requests += "${request.url.encodedPath} ${request.headers[HttpHeaders.Authorization]}"
+            requests += request.body.toByteArray().decodeToString()
             respond(body, status, headersOf(HttpHeaders.ContentType, "text/event-stream"))
         }
         val settings = MapSettings()
@@ -53,7 +57,7 @@ class AssistantRepositoryImplTest {
             ),
             events,
         )
-        assertEquals(listOf("/v1/chat Bearer token-1"), requests)
+        assertEquals("/v1/chat Bearer token-1", requests.first())
     }
 
     @Test
@@ -108,7 +112,172 @@ class AssistantRepositoryImplTest {
         assertTrue(requests.isEmpty())
     }
 
+    @Test
+    fun `모르는 이름의 이벤트는 답변 조각으로 섞지 않고 건너뛴다`() = runTest {
+        val (repository, _) = repository(
+            body = "event: thinking\ndata: {\"delta\": \"속생각\"}\n\ndata: {\"delta\": \"답\"}\n\nevent: done\ndata: {}\n\n"
+        )
+        assertEquals(listOf(AnswerEvent.Delta("답")), repository.ask(listOf(question)).toList())
+    }
+
+    @Test
+    fun `요약은 파일 id 와 이름을 보내고 진행과 요약 조각을 차례로 내보낸다`() = runTest {
+        val (repository, requests) = repository(body = SUMMARY_SSE)
+        val events = repository.summarize("file-1", "보고서.pdf").toList()
+        assertEquals(
+            listOf(
+                AnswerEvent.Progress(1, 2),
+                AnswerEvent.Progress(2, 2),
+                AnswerEvent.Delta("한 줄 요약"),
+                AnswerEvent.Delta("\n### 주요 내용"),
+            ),
+            events,
+        )
+        assertEquals("/v1/summarize Bearer token-1", requests[0])
+        assertEquals(SummarizeRequest("file-1", "보고서.pdf"), Json.decodeFromString(SummarizeRequest.serializer(), requests[1]))
+    }
+
+    @Test
+    fun `모양이 맞지 않는 진행은 버린다`() = runTest {
+        val (repository, _) = repository(
+            body = "event: progress\ndata: {\"done\": 3, \"total\": 0}\n\nevent: progress\ndata: oops\n\ndata: {\"delta\": \"요약\"}\n\nevent: done\ndata: {}\n\n"
+        )
+        assertEquals(listOf(AnswerEvent.Delta("요약")), repository.summarize("f", "a.txt").toList())
+    }
+
+    @Test
+    fun `요약 오류 이벤트의 code 를 실패 이유로 바꾼다`() = runTest {
+        val cases = mapOf(
+            "unsupported_file" to AnswerFailure.UnsupportedFile,
+            "no_text" to AnswerFailure.NoText,
+            "encrypted_file" to AnswerFailure.EncryptedFile,
+            "broken_file" to AnswerFailure.BrokenFile,
+            "stream_interrupted" to AnswerFailure.Unreachable,
+            "" to AnswerFailure.Server("요약 실패"),
+            "something_new" to AnswerFailure.Server("요약 실패"),
+        )
+        for ((code, expected) in cases) {
+            val (repository, _) = repository(
+                body = "event: error\ndata: {\"message\": \"요약 실패\", \"code\": \"$code\"}\n\nevent: done\ndata: {}\n\n"
+            )
+            val failure = assertFailsWith<AnswerFailure> { repository.summarize("f", "a.pdf").toList() }
+            assertEquals(expected, failure, "code=$code")
+        }
+    }
+
+    @Test
+    fun `브릿지가 파일을 받지 못해 거절한 이유를 나눈다`() = runTest {
+        assertFailsWith<AnswerFailure.FileNotFound> {
+            repository(status = HttpStatusCode.NotFound, body = """{"code":"file_not_found"}""").first.summarize("f", "a.pdf").toList()
+        }
+        assertFailsWith<AnswerFailure.FileTooLarge> {
+            repository(status = HttpStatusCode.PayloadTooLarge, body = """{"code":"file_too_large"}""").first.summarize("f", "a.pdf").toList()
+        }
+        assertFailsWith<AnswerFailure.Unreachable> {
+            repository(status = HttpStatusCode.ServiceUnavailable, body = """{"code":"talk_unreachable"}""").first.summarize("f", "a.pdf").toList()
+        }
+        assertFailsWith<AnswerFailure.SessionExpired> {
+            repository(status = HttpStatusCode.Unauthorized, body = """{"code":"unauthorized"}""").first.summarize("f", "a.pdf").toList()
+        }
+        assertFailsWith<AnswerFailure.RateLimited> {
+            repository(status = HttpStatusCode.TooManyRequests, body = """{"code":"rate_limited"}""").first.summarize("f", "a.pdf").toList()
+        }
+        val unknown = assertFailsWith<AnswerFailure.Server> {
+            repository(status = HttpStatusCode.NotFound, body = "").first.summarize("f", "a.pdf").toList()
+        }
+        assertEquals("", unknown.reason, "요약 경로가 없는 예전 브릿지의 404 는 파일 없음이 아니다")
+    }
+
+    @Test
+    fun `done 없이 끝난 답변은 받은 조각을 내보낸 뒤 닿지 못함으로 끝난다`() = runTest {
+        val (repository, _) = repository(body = ": connected\n\ndata: {\"delta\": \"4시간\"}\n\ndata: {\"delta\": \"입니\"}\n\n")
+        val events = mutableListOf<AnswerEvent>()
+        assertFailsWith<AnswerFailure.Unreachable> { repository.ask(listOf(question)).collect { events += it } }
+        assertEquals(listOf<AnswerEvent>(AnswerEvent.Delta("4시간"), AnswerEvent.Delta("입니")), events)
+    }
+
+    @Test
+    fun `done 없이 끝난 요약도 받은 데까지 내보낸 뒤 닿지 못함으로 끝난다`() = runTest {
+        val (repository, _) = repository(
+            body = ": connected\n\nevent: progress\ndata: {\"done\": 1, \"total\": 2}\n\n: ping\n\ndata: {\"delta\": \"한 줄 요약\"}\n\n"
+        )
+        val events = mutableListOf<AnswerEvent>()
+        assertFailsWith<AnswerFailure.Unreachable> { repository.summarize("f", "a.pdf").collect { events += it } }
+        assertEquals(listOf(AnswerEvent.Progress(1, 2), AnswerEvent.Delta("한 줄 요약")), events)
+    }
+
+    @Test
+    fun `done 뒤의 빈 줄 없이 본문이 끝나도 다 받은 것이다`() = runTest {
+        val (repository, _) = repository(body = "data: {\"delta\": \"답\"}\n\nevent: done\ndata: {}")
+        assertEquals(listOf(AnswerEvent.Delta("답")), repository.ask(listOf(question)).toList())
+    }
+
+    @Test
+    fun `done 의 이름만 받고 끊기면 끝을 받지 못한 것이다`() = runTest {
+        val (repository, _) = repository(body = "data: {\"delta\": \"답\"}\n\nevent: done\n")
+        assertFailsWith<AnswerFailure.Unreachable> { repository.ask(listOf(question)).toList() }
+    }
+
+    @Test
+    fun `중계가 끊겨 브릿지가 오류를 덧붙이면 조각 경계든 조각 중간이든 done 없이 끝난 것과 같은 닿지 못함이다`() = runTest {
+        val appended = "\n\nevent: error\ndata: {\"message\":\"stream interrupted\",\"code\":\"stream_interrupted\"}\n\n" +
+            "event: done\ndata: {}\n\n"
+        val bodies = mapOf(
+            "줄 경계" to "data: {\"delta\": \"앞\"}\n\n$appended",
+            "줄 중간" to "data: {\"delta\": \"앞\"}\n\ndata: {\"delta\": \"잘$appended",
+            "done 없음" to "data: {\"delta\": \"앞\"}\n\n",
+        )
+        for ((label, body) in bodies) {
+            val repository = repository(body = body).first
+            val summarized = mutableListOf<AnswerEvent>()
+            assertFailsWith<AnswerFailure.Unreachable>(label) { repository.summarize("f", "a.txt").collect { summarized += it } }
+            assertEquals(listOf<AnswerEvent>(AnswerEvent.Delta("앞")), summarized, label)
+            assertFailsWith<AnswerFailure.Unreachable>(label) { repository.ask(listOf(question)).toList() }
+        }
+    }
+
+    @Test
+    fun `파일 거절은 상태가 아니라 브릿지 code 로 가린다`() = runTest {
+        val proxyLimit = assertFailsWith<AnswerFailure.Server> {
+            repository(status = HttpStatusCode.PayloadTooLarge, body = "").first.ask(listOf(question)).toList()
+        }
+        assertEquals("", proxyLimit.reason, "code 없는 413(중간 프록시)은 20MB 넘는 파일이 아니다")
+        assertFailsWith<AnswerFailure.FileTooLarge> {
+            repository(status = HttpStatusCode.PayloadTooLarge, body = """{"code":"file_too_large","message":""}""").first.summarize("f", "a.pdf").toList()
+        }
+        assertFailsWith<AnswerFailure.FileNotFound> {
+            repository(status = HttpStatusCode.NotFound, body = """{"code":"file_not_found","message":""}""").first.summarize("f", "a.pdf").toList()
+        }
+    }
+
+    @Test
+    fun `로그인하지 않았으면 요약도 브릿지를 부르지 않는다`() = runTest {
+        val (repository, requests) = repository(loggedIn = false)
+        assertFailsWith<AnswerFailure.SessionExpired> { repository.summarize("f", "a.pdf").toList() }
+        assertTrue(requests.isEmpty())
+    }
+
     private companion object {
+        val SUMMARY_SSE = """
+            : connected
+
+            event: progress
+            data: {"done": 1, "total": 2}
+
+            : ping
+
+            event: progress
+            data: {"done": 2, "total": 2}
+
+            data: {"delta": "한 줄 요약"}
+
+            data: {"delta": "\n### 주요 내용"}
+
+            event: done
+            data: {}
+
+        """.trimIndent()
+
         val SSE = """
             : connected
 

@@ -39,6 +39,9 @@ class LoginViewModel(
                 _uiState.value.serverInput?.let { loginUseCases.setServerUrl(it) }
                 _uiState.update { it.copy(serverInput = null) }
             }
+            is LoginActions.OnAccountRequested -> _uiState.update {
+                it.copy(id = action.id.trim(), pw = "", isPasswordVisible = false)
+            }
         }
     }
 

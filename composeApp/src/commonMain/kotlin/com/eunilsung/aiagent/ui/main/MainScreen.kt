@@ -1,5 +1,11 @@
 package com.eunilsung.aiagent.ui.main
 
+import aiagent.composeapp.generated.resources.Res
+import aiagent.composeapp.generated.resources.summary_login_message
+import aiagent.composeapp.generated.resources.summary_login_message_logged_out
+import aiagent.composeapp.generated.resources.summary_login_title
+import aiagent.composeapp.generated.resources.summary_login_title_other
+import aiagent.composeapp.generated.resources.toast_summary_cancelled
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
@@ -55,7 +61,10 @@ import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.core.stack.StackEvent
 import cafe.adriel.voyager.navigator.Navigator
+import com.eunilsung.aiagent.ui.chat.ChatScreen
+import com.eunilsung.aiagent.ui.login.LoginActions
 import com.eunilsung.aiagent.ui.login.LoginScreen
+import com.eunilsung.aiagent.ui.login.LoginViewModel
 import com.eunilsung.aiagent.ui.main.tab.ChatTab
 import com.eunilsung.aiagent.ui.main.tab.CurrentAppTab
 import com.eunilsung.aiagent.ui.main.tab.SettingTab
@@ -64,8 +73,11 @@ import com.eunilsung.aiagent.ui.main.tab.rememberAppTabState
 import com.eunilsung.aiagent.ui.theme.AppColors
 import com.eunilsung.aiagent.ui.theme.AppTheme
 import com.eunilsung.aiagent.ui.uikit.BackHandler
+import com.eunilsung.aiagent.ui.uikit.dialog.LocalDialogManager
 import com.eunilsung.aiagent.ui.uikit.line.LineDivider
+import com.eunilsung.aiagent.ui.uikit.toast.LocalToastManager
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.getString
 import org.koin.compose.viewmodel.koinViewModel
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -73,25 +85,52 @@ import kotlin.math.roundToInt
 /**
  * 앱 첫 화면. 구조는 Talk 의 MainScreen 과 같다 — 왼쪽은 하단 탭, 오른쪽은 우측 네비게이터([LocalRightNavigator])가 연
  * 대화방이다. 태블릿은 둘을 나란히 두고, 폰은 대화방을 위에 덮어 밀어서 닫는다. 로그인하지 않았으면 로그인 화면을 덮는다.
+ *
+ * Talk 요약 링크도 여기서 받는다. 같은 계정이면 요약 대화방을 대화 목록과 같은 방식으로 열고, 다른 계정이면
+ * 로그인 칸의 아이디를 그 계정으로 바꾸고 안내를 띄운다. 로그인 화면이 이미 떠 있어도 아이디를 바꾸도록
+ * 로그인 화면의 ViewModel 을 여기서 받아 넘긴다.
  */
 object MainScreen : Screen {
     @Composable
     override fun Content() {
         val viewModel: MainViewModel = koinViewModel()
+        val loginViewModel: LoginViewModel = koinViewModel()
         val uiState by viewModel.uiState.collectAsState()
 
         AppTheme {
             Navigator(EmptyScreen) { rightNavigator ->
                 AppHosts(rightNavigator = rightNavigator) {
+                    val dialog = LocalDialogManager.current
+                    val toast = LocalToastManager.current
                     LaunchedEffect(viewModel) {
                         viewModel.events.collect { event ->
                             when (event) {
                                 MainEvent.LoggedOut -> rightNavigator.popToEmptyRoot()
+                                is MainEvent.OpenChat -> {
+                                    if ((rightNavigator.lastItem as? ChatScreen)?.conversationId != event.conversationId) {
+                                        rightNavigator.popToEmptyRoot()
+                                        rightNavigator.push(ChatScreen(event.conversationId))
+                                    }
+                                }
+                                is MainEvent.SummaryLoginRequired -> {
+                                    loginViewModel.onAction(LoginActions.OnAccountRequested(event.userId))
+                                    dialog.alert(
+                                        title = getString(
+                                            if (event.loggedOut) Res.string.summary_login_title_other else Res.string.summary_login_title
+                                        ),
+                                        message = getString(
+                                            if (event.loggedOut) Res.string.summary_login_message_logged_out else Res.string.summary_login_message,
+                                            event.userName,
+                                            event.userId,
+                                        ),
+                                    )
+                                }
+                                MainEvent.SummaryCancelled -> toast.show(getString(Res.string.toast_summary_cancelled))
                             }
                         }
                     }
                     MainContent(isLoggedIn = uiState.isLoggedIn)
-                    if (!uiState.isLoggedIn) LoginScreen()
+                    if (!uiState.isLoggedIn) LoginScreen(loginViewModel)
                 }
             }
         }

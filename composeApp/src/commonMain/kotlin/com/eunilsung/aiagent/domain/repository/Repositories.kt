@@ -6,6 +6,7 @@ import com.eunilsung.aiagent.domain.model.Conversation
 import com.eunilsung.aiagent.domain.model.LoginResult
 import com.eunilsung.aiagent.domain.model.Person
 import com.eunilsung.aiagent.domain.model.ServiceStatus
+import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.model.User
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +33,12 @@ interface ConversationRepository {
 
     fun observeMessages(conversationId: String): Flow<List<ChatMessage>>
 
+    /**
+     * 로그인한 사람의 대화를 다 읽은 목록. 로그인 바로 뒤라 아직 읽지 않았으면 읽고 돌려준다.
+     * [conversations] 는 로그인이 바뀐 뒤 잠깐 앞 사람(또는 빈) 목록일 수 있다.
+     */
+    suspend fun currentConversations(): List<Conversation>
+
     /** 지금 들고 있는 메시지. 질문을 보낼 때 대화 기록으로 쓴다. */
     suspend fun messages(conversationId: String): List<ChatMessage>
 
@@ -47,12 +54,47 @@ interface ConversationRepository {
     suspend fun upsertMessage(message: ChatMessage, persist: Boolean = true)
 }
 
-/** 로컬 LLM 에 묻는다. */
+/**
+ * 로컬 LLM 에 묻는다.
+ *
+ * 흐름이 정상으로 끝나면 답변을 다 받은 것이다. 서버가 끝을 알리기 전에 연결이 끊기면 받은 데까지 내보낸 뒤
+ * [com.eunilsung.aiagent.domain.model.AnswerFailure.Unreachable] 을 던진다.
+ */
 interface AssistantRepository {
     /**
      * [history] 의 마지막 질문에 답한다. 실패하면 [com.eunilsung.aiagent.domain.model.AnswerFailure] 를 던진다.
      */
     fun ask(history: List<ChatMessage>): Flow<AnswerEvent>
+
+    /**
+     * Talk 파일 [fileId] 를 요약한다. 긴 문서는 나눠 읽는 동안 [AnswerEvent.Progress] 가 오고, 그 뒤에 요약 조각이 온다.
+     * 브릿지가 로그인한 사람의 Talk 토큰으로 파일을 받으므로 볼 수 없는 파일이면
+     * [com.eunilsung.aiagent.domain.model.AnswerFailure.FileNotFound] 를 던진다.
+     */
+    fun summarize(fileId: String, fileName: String): Flow<AnswerEvent>
+}
+
+/**
+ * Talk 에서 넘어온 문서 요약 요청.
+ *
+ * 앱 밖에서 열린 링크를 받아 두고, 처리를 기다리는 요청을 들고 있다 — 로그인을 기다리는 요청 하나와,
+ * 대화방이 열리기를 기다리는 요청(대화 id 별). 기기에 저장하지 않는다. 앱이 꺼지면 사라진다.
+ */
+interface SummaryRequestRepository {
+    /** 앱 밖에서 열린 링크. 앱 전체에서 한 곳만 받고, 받은 링크는 다시 나오지 않는다. */
+    val incomingLinks: Flow<String>
+
+    /** [request] 를 대화 [conversationId] 에 걸어 둔다. 그 대화방이 열리면 꺼내 요약을 시작한다. */
+    fun hold(conversationId: String, request: SummaryRequest)
+
+    /** 대화 [conversationId] 에 걸리는 요약을 걸리는 대로 꺼낸다. 꺼낸 요약은 다시 나오지 않는다. */
+    fun takeHeld(conversationId: String): Flow<SummaryRequest>
+
+    /** 로그인을 기다리게 한다. 앞에 기다리던 요청이 있으면 버린다. */
+    fun awaitLogin(request: SummaryRequest)
+
+    /** 로그인을 기다리던 요청을 꺼낸다. 없으면 null. */
+    fun takeAwaitingLogin(): SummaryRequest?
 }
 
 /** Talk 메신저. 로그인한 사람으로 Talk 에 메시지를 보낸다. */

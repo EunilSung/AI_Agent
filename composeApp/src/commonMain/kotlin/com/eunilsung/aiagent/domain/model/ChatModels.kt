@@ -30,6 +30,8 @@ data class ChatMessage(
     val createdAt: Long,
     /** AI 가 답 대신 정한 Talk 메시지 보내기. 있으면 말풍선 대신 확인 카드로 보인다. */
     val sendRequest: SendRequest? = null,
+    /** 긴 문서를 나눠 읽는 중이면 얼마나 읽었는지. 받는 동안 화면에만 있고 기기 DB 에는 저장하지 않는다. */
+    val progress: AnswerEvent.Progress? = null,
 )
 
 enum class ChatRole { User, Assistant }
@@ -86,6 +88,8 @@ sealed interface AnswerEvent {
     data class SendRequested(val recipient: String, val content: String) : AnswerEvent
     /** 문서에서 답을 찾지 못했다. 앞서 온 근거·검색어는 이 답의 근거가 아니다. 답변이 끝날 때 한 번 온다. */
     data object NotFound : AnswerEvent
+    /** 긴 문서를 [total] 조각으로 나눠 읽는 중이고 [done] 조각을 읽었다. 요약에만 온다. */
+    data class Progress(val done: Int, val total: Int) : AnswerEvent
 }
 
 /** 답변을 받지 못한 이유. */
@@ -96,8 +100,23 @@ sealed class AnswerFailure : Exception() {
     data object RateLimited : AnswerFailure()
     /** 브릿지나 그 뒤의 서버에 닿지 못했다. 다시 보내면 될 수 있다. */
     data object Unreachable : AnswerFailure()
-    /** 서버가 답을 만들다 실패했다. */
+    /**
+     * 서버가 답을 만들다 실패했다. [reason] 은 서버가 남긴 기록용 설명(영어 예외 문장이나 거절 code)이라 로그에만 남고
+     * 화면에 쓰지 않는다 — 내부 주소가 들어 있을 수 있고, 같은 실패도 경우마다 문장이 다르다.
+     */
     data class Server(val reason: String) : AnswerFailure()
+    /** 요약할 수 없는 파일 형식이다(이미지·압축 파일, 옛 doc·xls·ppt 등). */
+    data object UnsupportedFile : AnswerFailure()
+    /** 문서에 글자가 없다 — 스캔한 PDF·빈 문서. */
+    data object NoText : AnswerFailure()
+    /** 암호가 걸렸거나 배포용으로 잠긴 문서다. */
+    data object EncryptedFile : AnswerFailure()
+    /** 형식은 맞는데 파일이 깨져 읽지 못했다. */
+    data object BrokenFile : AnswerFailure()
+    /** Talk 에 파일이 없거나(지워짐) 로그인한 사람이 그 파일이 있는 방에 없다. */
+    data object FileNotFound : AnswerFailure()
+    /** 요약할 수 있는 크기(20MB)를 넘는 파일이다. */
+    data object FileTooLarge : AnswerFailure()
 }
 
 /** 로그인 결과. */

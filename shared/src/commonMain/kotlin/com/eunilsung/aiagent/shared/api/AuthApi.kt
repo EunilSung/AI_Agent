@@ -43,5 +43,9 @@ object ErrorCode {
     const val TALK_UNREACHABLE = "talk_unreachable"
     const val RAG_UNREACHABLE = "rag_unreachable"
     const val NOT_FOUND = "not_found"
+    /** 요약할 파일이 Talk 에 없거나, 그 파일이 있는 방의 사람이 아니다. */
+    const val FILE_NOT_FOUND = "file_not_found"
+    /** 요약할 파일이 [MAX_SUMMARY_FILE_BYTES] 보다 크다. */
+    const val FILE_TOO_LARGE = "file_too_large"
     const val FAILED = "failed"
 }
