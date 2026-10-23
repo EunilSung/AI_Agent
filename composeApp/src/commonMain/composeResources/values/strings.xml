@@ -60,9 +60,10 @@
     <string name="chat_stopped">Stopped</string>
     <string name="chat_search_query">Search: %1$s</string>
     <string name="chat_answer_failed">Could not get an answer.</string>
+    <string name="chat_answer_cut">The answer was cut off.</string>
     <string name="toast_chat_unreachable">Could not reach the server.</string>
     <string name="toast_chat_rate_limited">Too many questions. Please try again later.</string>
-    <string name="toast_chat_server">The server could not answer: %1$s</string>
+    <string name="toast_chat_server">The server could not answer. Please try again later.</string>
     <string name="toast_session_expired">Please log in again.</string>
 
     <string name="setting_title">Settings</string>
@@ -89,4 +90,18 @@
     <string name="date_ampm_pm">PM</string>
     <string name="date_year_month_day">%1$d/%2$d/%3$d</string>
     <string name="chat_move_to_latest">Move to latest</string>
+
+    <string name="summary_question">Summarize %1$s</string>
+    <string name="summary_reading">Reading the document (%1$d/%2$d)</string>
+    <string name="summary_login_title_other">Request for another account</string>
+    <string name="summary_login_title">Log in to summarize</string>
+    <string name="summary_login_message">To summarize a file from the Talk account %1$s (%2$s), please log in with that account.</string>
+    <string name="summary_login_message_logged_out">You have been logged out of the current account. To summarize a file from the Talk account %1$s (%2$s), please log in with that account.</string>
+    <string name="toast_summary_cancelled">Document summary canceled because you logged in with a different account.</string>
+    <string name="toast_summary_unsupported">This file type cannot be summarized.</string>
+    <string name="toast_summary_no_text">No text was found in the document. Scanned documents cannot be summarized.</string>
+    <string name="toast_summary_encrypted">The document is password-protected or locked, so it cannot be summarized.</string>
+    <string name="toast_summary_broken">The file is damaged and could not be read.</string>
+    <string name="toast_summary_not_found">File not found. It may have been deleted or be in a room you cannot access.</string>
+    <string name="toast_summary_too_large">Files larger than 20 MB cannot be summarized.</string>
 </resources>

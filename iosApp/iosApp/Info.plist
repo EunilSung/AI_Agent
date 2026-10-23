@@ -10,6 +10,18 @@
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- Talk 의 파일 대화 "AI 요약"이 aiagent://summarize?fileId=…&fileName=…&userId=…&userName=… 로 이 앱을 연다. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.eunilsung.aiagent.summarize</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>aiagent</string>
+			</array>
+		</dict>
+	</array>
 	<!-- 개발 중에는 이 Mac 의 브릿지(http://localhost:8095)에 붙는다. 터널로 바깥에 열 때는 https 주소를 쓴다. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

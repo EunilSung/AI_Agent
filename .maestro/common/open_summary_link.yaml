@@ -1,0 +1,21 @@
+appId: com.eunilsung.aiagent
+name: Talk 의 "AI 요약" 링크를 연다
+# Talk 가 파일 대화를 길게 눌러 "AI 요약"을 고르면 여는 링크와 같다.
+# 받는 값: SUMMARY_FILE_ID·SUMMARY_FILE_NAME(실행 때 -e 로), LINK_USER_ID·LINK_USER_NAME(부르는 흐름이 env 로).
+# 이름과 파일명은 URL 인코딩한 값을 그대로 넣는다(한글은 UTF-8 퍼센트 인코딩, 공백은 %20).
+---
+- openLink: aiagent://summarize?fileId=${SUMMARY_FILE_ID}&fileName=${SUMMARY_FILE_NAME}&userId=${LINK_USER_ID}&userName=${LINK_USER_NAME}
+- runFlow:
+    when:
+      platform: iOS
+      visible: "Open"
+    label: 시뮬레이터가 다른 앱 열기를 물으면 연다
+    commands:
+      - tapOn: "Open"
+- runFlow:
+    when:
+      platform: iOS
+      visible: "열기"
+    label: 시뮬레이터가 다른 앱 열기를 물으면 연다(한국어)
+    commands:
+      - tapOn: "열기"

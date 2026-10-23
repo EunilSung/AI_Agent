@@ -1,12 +1,13 @@
 # AI_Agent
 
 **로컬 LLM 으로 사내 문서에 답하고, 말로 시키면 Talk 메신저에 메시지를 보내는 AI Agent 앱(Android · iOS)과 서버들.**
-LLM·문서·대화 기록은 모두 사내(이 Mac)에 머문다. 메신저는 같은 회사의 [Talk](../Talk) 를 그대로 쓴다 — Talk 저장소는 고치지 않았다.
+LLM·문서·대화 기록은 모두 사내(이 Mac)에 머문다. 메신저는 같은 회사의 [Talk](../Talk) 를 그대로 쓴다.
+Talk 쪽에서 고친 것은 파일 대화의 "AI 요약" 메뉴 하나다(이 앱을 링크로 연다).
 
 ```
-[AI Agent 앱]──로그인·대화(SSE)──▶[브릿지 :8095]──▶[RAG 서버 :8000]──▶[Ollama: gemma4:26b · bge-m3]
- Android·iOS                       Kotlin/Ktor  │      Python·Chroma
-                                                └──▶[Talk 서버 :8090]  로그인 확인 · 사람 찾기 · 메시지 보내기
+[Talk 앱]──aiagent://summarize──▶[AI Agent 앱]──로그인·대화·요약(SSE)──▶[브릿지 :8095]──▶[RAG 서버 :8000]──▶[Ollama: gemma4:26b · bge-m3]
+ 파일 대화 "AI 요약"                 Android·iOS                          Kotlin/Ktor  │      Python·Chroma
+                                                                                    └──▶[Talk 서버 :8090]  로그인 확인 · 사람 찾기 · 메시지 보내기 · 파일 받기
 ```
 
 | 할 수 있는 것 | 예 |
@@ -15,6 +16,7 @@ LLM·문서·대화 기록은 모두 사내(이 Mac)에 머문다. 메신저는 
 | 후속 질문 이해 | "그거 어느 메뉴에서 해?" → 앞 대화를 반영해 검색어를 다시 쓴다(화면에 검색어 표시) |
 | Talk 로 메시지 보내기 (에이전트) | "이서연에게 내일 회의가 10시로 바뀌었다고 보내줘" → 확인 카드 → [보내기] → Talk 에 본인 이름으로 전송 |
 | 앞 답변을 그대로 보내기 | "방금 그 내용 test3한테도 알려줘" → 앞 답변을 내용으로 채운 확인 카드 |
+| Talk 문서 요약 | Talk 에서 문서 파일 대화를 길게 눌러 "AI 요약" → 이 앱이 열리고 새 대화에 "파일명 요약해 줘"와 요약 답변 |
 
 ---
 
@@ -37,6 +39,26 @@ Talk 와 같은 구조(Clean Architecture + MVI, Koin, Voyager, Ktor, SQLDelight
 - **로그인한 사람으로 보낸다.** 브릿지는 그 사람의 Talk 토큰으로 Talk 의 기존 API(사람 목록 → 1:1 방 열기 → 대화 보내기)를 부른다.
   Talk 에서는 본인이 보낸 메시지로 보이고, 누구에게 보낼 수 있는지도 Talk 서버의 규칙을 따른다.
 - **두 번 가지 않는다.** 앱 메시지 id 를 Talk 대화 id 로 쓴다. 응답을 못 받아 다시 보내도 Talk 는 한 번만 받는다.
+
+### Talk 문서 요약
+
+Talk 의 파일 대화를 길게 눌러 "AI 요약"을 고르면 Talk 가 이 앱을 링크로 연다.
+
+```
+aiagent://summarize?fileId=<Talk 파일 id>&fileName=<파일 이름>&userId=<Talk 아이디>&userName=<이름>   (값은 모두 퍼센트 인코딩)
+```
+
+- **계정을 맞춘다.** 이 앱에 같은 아이디로 로그인해 있으면 바로 새 대화를 만들어 요약한다. 로그인 전이거나 다른 계정이면
+  (로그인해 있던 계정은 로그아웃하고) 로그인 칸의 아이디를 요청한 계정으로 바꾸고 안내 팝업을 띄운다. 그 계정으로 로그인하면
+  요약이 이어지고, 다른 계정으로 로그인하면 요약을 취소했다고 알린다.
+- **파일은 볼 수 있는 사람만 받는다.** 브릿지가 로그인한 사람의 Talk 토큰으로 Talk 서버에서 파일을 받는다. Talk 서버는 그 파일이
+  있는 방의 사람에게만 파일을 준다. 아무 앱이 링크를 열어도 남의 파일은 요약되지 않는다.
+- **형식**: txt·md·csv·tsv·log·json·xml·html, pdf, docx, xlsx, pptx, hwpx, hwp(5.0). 20MB 까지. 스캔한 PDF(글자 없음)·암호 걸린
+  문서·옛 doc/xls/ppt·HWP 3.x 는 이유를 알려 주고 요약하지 않는다. 라이브러리는 BSD·MIT 계열만 쓴다(pypdf·python-docx·openpyxl·
+  python-pptx·olefile·cryptography). HWP 는 olefile 로 본문 레코드를 직접 읽는다.
+- **긴 문서**: 1만 자까지는 한 번에, 그보다 길면 약 7천 자 조각으로 나눠 조각마다 메모를 받은 뒤 합쳐 요약한다(조각마다 진행 표시).
+  조각은 12개(약 8만 자)까지 읽고, 넘으면 앞부분만 읽었다고 요약 끝에 적는다. 짧은 문서는 5~10초, 12조각은 약 3분.
+- 요약한 문서는 사내 문서 검색 DB(Chroma)에 넣지 않는다. 같은 대화에서 이어 묻는 질문은 요약 글을 대화 기록으로 삼는다.
 
 ## 준비
 
@@ -86,28 +108,36 @@ open iosApp/iosApp.xcodeproj                               # iOS — Xcode 에�
 |---|---|
 | `POST /v1/auth/login` · `/v1/auth/logout` | Talk 서버 `/auth/login` 을 대행. 토큰은 Talk 토큰이다 |
 | `POST /v1/chat` | 대화 기록을 받아 RAG 서버의 SSE 를 그대로 흘려보낸다. 앞서 정한 메시지 보내기는 글이 아니라 `sendAction: {recipient, content, sent}` 으로 실어 보낸다 — RAG 서버가 도구 호출과 그 결과로 LLM 에 넣는다 |
+| `POST /v1/summarize` | `{fileId, fileName}` → 사용자 Talk 토큰으로 Talk `GET /files/{fileId}` 를 받아 RAG 서버 `/v1/summarize`(파일 이름은 `X-File-Name` 헤더, 퍼센트 인코딩)에 넘기고 SSE 를 흘려보낸다. 거절: 404 `file_not_found`(없거나 그 방 사람이 아님), 413 `file_too_large`(20MB 초과), 503 `talk_unreachable`·`rag_unreachable` |
 | `GET /v1/talk/people?q=` | 이름 일부·아이디·"이름(아이디)"로 Talk 사람 찾기. 나는 빠진다 |
 | `POST /v1/talk/messages` | `{recipientId, content, requestId}` → 1:1 방을 열고(있으면 그 방) 대화를 보낸다 |
 | `GET /v1/health` | 브릿지·RAG(모델·조각 수)·Talk 연결 |
 
-SSE 이벤트(`POST /v1/chat`):
+거절은 요청의 `Accept`(SSE 경로는 `text/event-stream`)와 상관없이 늘 JSON `{"code": …}` 으로 온다.
+
+SSE 이벤트(`POST /v1/chat` · `POST /v1/summarize`):
 
 ```
-: connected                                     ← 연결 유지용 주석
-event: sources  data: {"sources":[…], "query":"다시 쓴 검색어"}   ← query 는 다시 썼을 때만
+: connected                                     ← 연결 유지용 주석 (요약은 10초마다 : ping 도)
+event: sources  data: {"sources":[…], "query":"다시 쓴 검색어"}   ← 대화만. query 는 다시 썼을 때만
+event: progress data: {"done":1,"total":3}       ← 요약만. 긴 문서를 나눠 읽는 진행
 data: {"delta":"답변 조각"}                      ← 여러 번
-event: action   data: {"type":"send_message","recipient":"이서연","content":"…"}   ← 답 대신 보내기 요청
-event: error    data: {"message":"…"}
+event: action   data: {"type":"send_message","recipient":"이서연","content":"…"}   ← 대화만. 답 대신 보내기 요청
+event: error    data: {"message":"기록용","code":"no_text"}   ← code 로 앱이 문구를 고른다(message 는 화면에 쓰지 않는다)
 event: done     data: {} 또는 {"notFound":true}   ← 답변이 "문서에서 찾을 수 없습니다" 뿐이면 앱이 근거·검색어를 지운다
 ```
+
+- 요약 실패 code: `unsupported_file`·`no_text`·`encrypted_file`·`broken_file`. 브릿지가 RAG 중계 도중 끊기면 `stream_interrupted` 를 덧붙인다.
+- 앱은 `done` 없이 끝난 스트림을 끊긴 것으로 보고, 받은 데까지만 "답변이 중간에 끊겼습니다"로 남긴다.
 
 ## 검증
 
 | 실행 | 내용 |
 |---|---|
-| `./gradlew :bridge:test` | 브릿지 13개 — 로그인 대행, 토큰 확인, SSE 중계, 한도, RAG 꺼짐, 사람 찾기(이름·아이디·이름(아이디)), 보내기, 로그인 없이 보내기 차단, 보내기 기록(sendAction) 중계 |
-| `./gradlew :composeApp:testDebugUnitTest :composeApp:iosSimulatorArm64Test` | 앱 36개 × Android(JVM)·iOS — SSE 해석, 마크다운, 대화 묶음·날짜선, 보내기 기록·못 찾음 처리, 실패 분류, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB |
-| `maestro --device <기기> test .maestro` | 실화면 흐름 2개 × Android·iOS — 추천 질문에 근거 문서로 답하기 / Talk 로 메시지 보내기 |
+| `./gradlew :bridge:test` | 브릿지 33개 — 로그인 대행, 토큰 확인, SSE 중계, 한도, RAG 꺼짐, 사람 찾기(이름·아이디·이름(아이디)), 보내기, 로그인 없이 보내기 차단, 보내기 기록(sendAction) 중계, 요약(파일 받기·20MB 경계·Talk/RAG 끊김·파일 이름은 헤더로·로그에 이름 안 남김), SSE 를 바라는 요청의 거절도 JSON |
+| `./gradlew :composeApp:testDebugUnitTest :composeApp:iosSimulatorArm64Test` | 앱 96개 × Android(JVM)·iOS — SSE 해석, 마크다운, 대화 묶음·날짜선, 보내기 기록·못 찾음 처리, 실패 분류, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB, 요약 링크 해석·계정 확인·로그인 뒤 이어 가기, 요약 진행·실패 이유·끊긴 답변, HTTP 제한, Koin 구성 |
+| `cd rag-server && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest -q` | RAG 132개 — 형식별 글 뽑기(HWP 는 테스트가 OLE 파일을 직접 만든다), 암호·스캔·깨짐·지원 안 함, 압축 폭탄·글자 상한, 나눠 요약·진행·ping·끊김, `X-File-Name` |
+| `maestro --device <기기> test .maestro -e SUMMARY_FILE_ID=… -e SUMMARY_FILE_NAME=…` | 실화면 흐름 3개 × Android·iOS — 추천 질문에 근거 문서로 답하기 / Talk 로 메시지 보내기 / 요약 링크(같은 계정·다른 계정·엉뚱한 계정으로 로그인). 03 은 test1–test2 1:1 방에 올린 Talk 파일 id 와 URL 인코딩한 이름이 필요하다 |
 
 Android Studio 실행 구성: `테스트 (JVM)`, `테스트 (JVM + iOS 시뮬레이터)`, `브릿지 실행`.
 

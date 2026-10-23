@@ -60,9 +60,10 @@
     <string name="chat_stopped">중지됨</string>
     <string name="chat_search_query">검색어: %1$s</string>
     <string name="chat_answer_failed">답변을 받지 못했습니다.</string>
+    <string name="chat_answer_cut">답변이 중간에 끊겼습니다.</string>
     <string name="toast_chat_unreachable">서버에 연결하지 못했습니다.</string>
     <string name="toast_chat_rate_limited">질문이 너무 많습니다. 잠시 후 다시 시도해 주세요.</string>
-    <string name="toast_chat_server">서버가 답하지 못했습니다: %1$s</string>
+    <string name="toast_chat_server">서버가 답하지 못했습니다. 잠시 후 다시 시도해 주세요.</string>
     <string name="toast_session_expired">다시 로그인해 주세요.</string>
 
     <string name="setting_title">설정</string>
@@ -89,4 +90,18 @@
     <string name="date_ampm_pm">오후</string>
     <string name="date_year_month_day">%1$d년 %2$d월 %3$d일</string>
     <string name="chat_move_to_latest">최신 대화로 이동</string>
+
+    <string name="summary_question">%1$s 요약해 줘</string>
+    <string name="summary_reading">문서를 읽는 중이에요 (%1$d/%2$d)</string>
+    <string name="summary_login_title_other">다른 계정의 요청이에요</string>
+    <string name="summary_login_title">로그인이 필요해요</string>
+    <string name="summary_login_message">Talk 의 %1$s(%2$s) 계정 파일을 요약하려면 이 계정으로 로그인해 주세요.</string>
+    <string name="summary_login_message_logged_out">지금 계정에서 로그아웃했어요. Talk 의 %1$s(%2$s) 계정 파일을 요약하려면 이 계정으로 로그인해 주세요.</string>
+    <string name="toast_summary_cancelled">요약을 요청한 계정이 아니라서 문서 요약을 취소했어요.</string>
+    <string name="toast_summary_unsupported">요약할 수 없는 파일 형식이에요.</string>
+    <string name="toast_summary_no_text">문서에서 글자를 찾지 못했어요. 스캔한 문서는 요약할 수 없어요.</string>
+    <string name="toast_summary_encrypted">암호가 걸렸거나 배포용으로 잠긴 문서라 요약할 수 없어요.</string>
+    <string name="toast_summary_broken">파일이 손상되어 읽지 못했어요.</string>
+    <string name="toast_summary_not_found">파일을 찾을 수 없어요. 지워졌거나 볼 수 없는 방의 파일이에요.</string>
+    <string name="toast_summary_too_large">20MB 가 넘는 파일은 요약할 수 없어요.</string>
 </resources>

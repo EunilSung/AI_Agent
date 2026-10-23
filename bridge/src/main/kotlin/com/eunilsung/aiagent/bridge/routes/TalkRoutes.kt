@@ -33,13 +33,13 @@ fun Route.talkRoutes(talk: TalkClient, verifier: TokenVerifier, limiter: RateLim
         val me = call.requireUser(verifier) ?: return@get
         val query = call.request.queryParameters["q"].orEmpty()
         if (query.isBlank()) {
-            call.respond(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST))
+            call.respondError(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST))
             return@get
         }
         when (val result = talk.people(call.bearerToken()!!)) {
             is TalkResult.Success -> call.respond(PeopleResponse(result.value.filter { it.id != me.id && it.matches(query) }))
             is TalkResult.Rejected -> call.respondTalkRejected(result)
-            TalkResult.Unreachable -> call.respond(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
+            TalkResult.Unreachable -> call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
         }
     }
 
@@ -49,18 +49,18 @@ fun Route.talkRoutes(talk: TalkClient, verifier: TokenVerifier, limiter: RateLim
         if (request == null || request.recipientId.isBlank() || request.content.isBlank() ||
             request.content.length > MAX_CONTENT_LENGTH || request.requestId.isBlank() || request.requestId.length > MAX_REQUEST_ID_LENGTH
         ) {
-            call.respond(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST))
+            call.respondError(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST))
             return@post
         }
         if (!limiter.tryAcquire(me.id)) {
-            call.respond(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.RATE_LIMITED))
+            call.respondError(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.RATE_LIMITED))
             return@post
         }
         val token = call.bearerToken()!!
         val roomId = when (val room = talk.openDirectRoom(token, request.recipientId)) {
             is TalkResult.Success -> room.value
             is TalkResult.Rejected -> return@post call.respondTalkRejected(room)
-            TalkResult.Unreachable -> return@post call.respond(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
+            TalkResult.Unreachable -> return@post call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
         }
         when (val sent = talk.sendText(token, roomId, request.requestId, request.content)) {
             is TalkResult.Success -> {
@@ -68,7 +68,7 @@ fun Route.talkRoutes(talk: TalkClient, verifier: TokenVerifier, limiter: RateLim
                 call.respond(SendTalkMessageResponse(roomId))
             }
             is TalkResult.Rejected -> call.respondTalkRejected(sent)
-            TalkResult.Unreachable -> call.respond(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
+            TalkResult.Unreachable -> call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.TALK_UNREACHABLE))
         }
     }
 }
@@ -93,5 +93,5 @@ private suspend fun ApplicationCall.respondTalkRejected(result: TalkResult.Rejec
         HttpStatusCode.BadRequest.value -> ErrorCode.BAD_REQUEST
         else -> ErrorCode.FAILED
     }
-    respond(HttpStatusCode.fromValue(result.status), ApiError(code))
+    respondError(HttpStatusCode.fromValue(result.status), ApiError(code))
 }

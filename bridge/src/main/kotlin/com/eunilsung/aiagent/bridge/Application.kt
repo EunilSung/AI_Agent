@@ -6,6 +6,8 @@ import com.eunilsung.aiagent.bridge.rag.RagClient
 import com.eunilsung.aiagent.bridge.routes.authRoutes
 import com.eunilsung.aiagent.bridge.routes.chatRoutes
 import com.eunilsung.aiagent.bridge.routes.healthRoutes
+import com.eunilsung.aiagent.bridge.routes.respondError
+import com.eunilsung.aiagent.bridge.routes.summaryRoutes
 import com.eunilsung.aiagent.bridge.routes.talkRoutes
 import com.eunilsung.aiagent.bridge.talk.TalkClient
 import com.eunilsung.aiagent.shared.api.ApiError
@@ -21,7 +23,6 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
-import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
 import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
@@ -49,7 +50,7 @@ fun Application.module(config: BridgeConfig, rag: RagClient, talk: TalkClient) {
     install(StatusPages) {
         exception<Throwable> { call, cause ->
             call.application.environment.log.error("처리하지 못한 오류", cause)
-            call.respond(HttpStatusCode.InternalServerError, ApiError(ErrorCode.FAILED))
+            call.respondError(HttpStatusCode.InternalServerError, ApiError(ErrorCode.FAILED))
         }
     }
 
@@ -60,6 +61,7 @@ fun Application.module(config: BridgeConfig, rag: RagClient, talk: TalkClient) {
         healthRoutes(rag, talk)
         authRoutes(talk, verifier)
         chatRoutes(rag, verifier, limiter)
+        summaryRoutes(rag, talk, verifier, limiter)
         talkRoutes(talk, verifier, limiter)
     }
 }

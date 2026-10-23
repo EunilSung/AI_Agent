@@ -37,7 +37,8 @@ fun DialogHost(content: @Composable () -> Unit) {
                     request = null
                     req.onConfirm()
                 },
-                description = req.message
+                description = req.message,
+                title = req.title,
             )
             is DialogRequest.Confirm -> Button2Dialog(
                 onDismissRequest = {

@@ -40,6 +40,8 @@ class ConversationRepositoryImpl(
     private val queries = database.appDatabaseQueries
     private val mutex = Mutex()
     private var ownerId: String? = null
+    /** [ownerId] 의 대화를 한 번이라도 읽었는지. 로그인이 바뀐 것을 두 곳(지켜보는 쪽·[syncOwner])이 알아도 한 번만 읽는다. */
+    private var isLoaded = false
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     override val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
@@ -63,12 +65,18 @@ class ConversationRepositoryImpl(
             .map { it[conversationId].orEmpty() }
             .distinctUntilChanged()
 
+    override suspend fun currentConversations(): List<Conversation> = mutex.withLock {
+        syncOwner()
+        _conversations.value
+    }
+
     override suspend fun messages(conversationId: String): List<ChatMessage> {
         ensureLoaded(conversationId)
         return messageCache.value[conversationId].orEmpty()
     }
 
     override suspend fun create(): Conversation = mutex.withLock {
+        syncOwner()
         val owner = ownerId ?: error("로그인하지 않았다")
         val conversation = Conversation(id = newId(), title = "", preview = "", updatedAt = nowMillis())
         save(owner, conversation)
@@ -118,7 +126,17 @@ class ConversationRepositoryImpl(
         }
     }
 
-    private suspend fun reload(owner: String?) = mutex.withLock {
+    private suspend fun reload(owner: String?) = mutex.withLock { load(owner) }
+
+    /**
+     * 로그인한 사람이 바뀌었는데 아직 그 사람의 대화를 읽지 않았으면 지금 읽는다. [mutex] 를 잡은 채로 부른다.
+     * 로그인을 지켜보는 쪽([reload])은 따로 돌아서, 로그인 바로 뒤에 부르면 아직 앞 사람의 상태일 수 있다.
+     */
+    private fun syncOwner() = load(sessionStore.user.value?.id)
+
+    private fun load(owner: String?) {
+        if (isLoaded && ownerId == owner) return
+        isLoaded = true
         ownerId = owner
         messageCache.value = emptyMap()
         _conversations.value = owner?.let { queries.selectConversations(it).executeAsList().map(mapper::toDomain) }.orEmpty()
