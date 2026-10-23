@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 앱 아이콘 앞면 — 에이전트 얼굴. 100 단위 원본을 줄여 108dp 캔버스의 안전 영역(가운데 66dp) 안에 둔다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.743"
+        android:scaleY="0.743"
+        android:translateX="16.85"
+        android:translateY="19.08">
+        <path
+            android:pathData="M50,20L50,31"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeWidth="4" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M45,17a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M35,30H65A15,15 0,0 1,80 45V57A15,15 0,0 1,65 72H35A15,15 0,0 1,20 57V45A15,15 0,0 1,35 30z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,68L27,82L45,70z" />
+        <path
+            android:fillColor="@color/ic_launcher_background"
+            android:pathData="M34,49a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z" />
+        <path
+            android:fillColor="@color/ic_launcher_background"
+            android:pathData="M56,49a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z" />
+        <path
+            android:pathData="M42,59Q50,65 58,59"
+            android:strokeColor="@color/ic_launcher_background"
+            android:strokeLineCap="round"
+            android:strokeWidth="3.5" />
+    </group>
+</vector>

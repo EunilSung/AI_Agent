@@ -1,0 +1,29 @@
+appId: com.eunilsung.aiagent
+name: Talk 로 메시지를 보낸다
+# 로그인 → 새 대화 → "이서연(test2)에게 … 보내줘" → 확인 카드 → [보내기] → 보낸 결과.
+# 정말 Talk 에 들어갔는지는 흐름 밖에서 test2 로 Talk 서버에 물어 확인한다(README 의 검증 절차).
+---
+- runFlow: ../common/login.yaml
+- tapOn:
+    id: conversation_new
+- extendedWaitUntil:
+    visible:
+      id: chat_suggestion_3
+    timeout: 5000
+- tapOn:
+    id: chat_suggestion_3
+- extendedWaitUntil:
+    visible:
+      id: send_confirm
+    timeout: 90000
+    label: AI 가 보내기 요청을 알아들으면 받는 사람과 내용을 담은 확인 카드가 나온다
+- assertNotVisible:
+    id: send_result
+    label: 확인하기 전에는 보내지 않는다
+- tapOn:
+    id: send_confirm
+- extendedWaitUntil:
+    visible:
+      id: send_result
+    timeout: 15000
+- takeScreenshot: send-result
