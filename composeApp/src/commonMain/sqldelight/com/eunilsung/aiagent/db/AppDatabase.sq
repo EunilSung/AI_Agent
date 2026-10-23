@@ -1,0 +1,44 @@
+CREATE TABLE conversation (
+    id TEXT NOT NULL PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    preview TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX conversation_owner ON conversation(owner_id, updated_at);
+
+CREATE TABLE message (
+    id TEXT NOT NULL PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    search_query TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    send_request_json TEXT
+);
+
+CREATE INDEX message_conversation ON message(conversation_id, created_at);
+
+selectConversations:
+SELECT * FROM conversation WHERE owner_id = ? ORDER BY updated_at DESC;
+
+upsertConversation:
+INSERT OR REPLACE INTO conversation(id, owner_id, title, preview, updated_at) VALUES (?, ?, ?, ?, ?);
+
+deleteConversation:
+DELETE FROM conversation WHERE id = ?;
+
+selectMessages:
+SELECT * FROM message WHERE conversation_id = ? ORDER BY created_at, id;
+
+upsertMessage:
+INSERT OR REPLACE INTO message(id, conversation_id, role, content, sources_json, search_query, status, created_at, send_request_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteMessagesOf:
+DELETE FROM message WHERE conversation_id = ?;
+
+markStreamingStopped:
+UPDATE message SET status = 'Stopped' WHERE status = 'Streaming';

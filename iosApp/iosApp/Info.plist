@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 앱이 지원하는 언어. Compose 리소스(values, values-ko)와 같게 맞춘다. 없으면 iOS 는 영어만 지원한다고 본다. -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ko</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<!-- 개발 중에는 이 Mac 의 브릿지(http://localhost:8095)에 붙는다. 터널로 바깥에 열 때는 https 주소를 쓴다. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>같은 네트워크의 AI 브릿지 서버에 연결합니다.</string>
+</dict>
+</plist>

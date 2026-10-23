@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 스플래시 배경 — AppColors.Bg(Dark) -->
+    <color name="splash_bg">#FF121417</color>
+</resources>

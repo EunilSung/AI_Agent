@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="transparent">#00000000</color>
+    <color name="main">#3684FA</color>
+    <!-- 앱 아이콘 배경 -->
+    <color name="ic_launcher_background">#3B7CF6</color>
+    <!-- 스플래시 배경 — AppColors.Bg(Light). 다크는 values-night/colors.xml -->
+    <color name="splash_bg">#FFFFFFFF</color>
+</resources>

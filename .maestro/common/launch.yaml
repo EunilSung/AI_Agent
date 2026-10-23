@@ -1,0 +1,10 @@
+appId: com.eunilsung.aiagent
+name: 앱을 처음 상태로 띄운다
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible:
+      id: login_id
+    timeout: 10000
+    label: 로그인 입력칸이 나타날 때까지 기다린다

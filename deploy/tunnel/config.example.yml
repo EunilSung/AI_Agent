@@ -1,0 +1,10 @@
+# 고정 주소 터널 설정 예시. config.yml 로 복사해 <...> 를 채운다(config.yml 은 저장소에 올리지 않는다).
+# 순서는 README 의 "외부 접속 (Cloudflare Tunnel)" 을 따른다.
+tunnel: <터널 UUID>
+credentials-file: /Users/<사용자>/.cloudflared/<터널 UUID>.json
+
+ingress:
+  # 바깥에 여는 것은 브릿지 하나다. RAG 서버(8000)·Ollama(11434)·Talk 로컬 서버(8090)는 넣지 않는다.
+  - hostname: <ai.내도메인.com>
+    service: http://localhost:8095
+  - service: http_status:404

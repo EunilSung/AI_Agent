@@ -1,0 +1,32 @@
+*.iml
+.kotlin
+.gradle
+**/build/
+xcuserdata
+!src/**/build/
+local.properties
+.idea
+.DS_Store
+captures
+.externalNativeBuild
+.cxx
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+# RAG 서버 — 가상환경, 벡터 DB, 사내 문서 원본은 저장소에 올리지 않는다 (샘플 문서만 예외)
+rag-server/.venv/
+rag-server/chroma_data/
+rag-server/__pycache__/
+rag-server/docs/*
+!rag-server/docs/01_휴가규정.md
+!rag-server/docs/02_재택근무.md
+!rag-server/docs/03_장비지원.md
+
+# 터널 자격 증명
+deploy/tunnel/*.json
+deploy/tunnel/config.yml
+

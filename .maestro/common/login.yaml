@@ -1,0 +1,33 @@
+appId: com.eunilsung.aiagent
+name: test1 로 로그인
+---
+- runFlow: launch.yaml
+- tapOn:
+    id: login_id
+- eraseText: 20
+- inputText: test1
+- tapOn:
+    id: login_pw
+- inputText: "1234"
+- runFlow:
+    when:
+      platform: Android
+    label: 키보드 높이를 알려 주지 않는 에뮬레이터에서는 버튼이 키보드 뒤에 가리므로 키보드를 내리고 누른다
+    commands:
+      - hideKeyboard
+      - tapOn:
+          id: login_submit
+- runFlow:
+    when:
+      platform: iOS
+    label: iOS 는 키보드 위 자동완성 줄 때문에 버튼이 늦게 올라온다. 비밀번호 칸의 return(완료)으로 로그인한다
+    commands:
+      - pressKey: Enter
+- extendedWaitUntil:
+    notVisible:
+      id: login_id
+    timeout: 15000
+    label: 로그인 화면이 메인 화면을 덮고 있어, 버튼이 아니라 입력칸이 사라졌는지로 로그인을 확인한다
+- waitForAnimationToEnd:
+    timeout: 3000
+    label: 키보드가 내려가는 동안 누른 것은 먹지 않으므로 화면이 멈춘 뒤에 다음으로 간다
