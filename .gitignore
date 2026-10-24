@@ -30,3 +30,10 @@ rag-server/docs/*
 deploy/tunnel/*.json
 deploy/tunnel/config.yml
 
+
+# 서명 키·인증서 — 저장소 밖에 둔다
+*.jks
+*.keystore
+*.p12
+*.p8
+*.pem
