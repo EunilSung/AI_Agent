@@ -1,0 +1,131 @@
+# 테스트 — main 에 올라온 커밋과 PR 마다, 그리고 릴리스 전에 돈다(release.yml 이 부른다).
+# 공개 저장소라 로그·아티팩트는 GitHub 계정이 있는 누구나 본다. 앱은 접속 키·브릿지 주소 없이 빌드하고,
+# 키가 들어가지 않았는지 확인한다(키는 앱 바이너리에서 꺼낼 수 있다).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  jvm:
+    name: 브릿지 · 앱(JVM) 테스트
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AI_AGENT_BRIDGE_KEY: ''
+      AI_AGENT_BRIDGE_URL: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-provider: basic
+      - name: Gradle 메모리를 러너에 맞춘다
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g
+          EOF
+      - name: 브릿지 테스트 · 앱 테스트 · 앱 빌드
+        run: ./gradlew :bridge:test :composeApp:testDebugUnitTest :composeApp:assembleDebug --continue
+      - name: 앱에 접속 키가 들어가지 않았는지 확인
+        run: |
+          config=composeApp/build/generated/bridgeConfig/commonMain/kotlin/com/eunilsung/aiagent/data/remote/BridgeBuildConfig.kt
+          if ! grep -q 'BRIDGE_ACCESS_KEY: String = ""' "$config"; then
+            echo "::error::공개 CI 빌드에 접속 키가 들어갔다"
+            exit 1
+          fi
+      - name: 실패한 테스트 보고서
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jvm-test-reports
+          path: |
+            bridge/build/reports/tests
+            composeApp/build/reports/tests
+          retention-days: 14
+
+  rag:
+    name: RAG 서버 테스트
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rag-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: rag-server/requirements*.txt
+      - name: 의존성 설치
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: pytest (LLM 은 대역)
+        env:
+          ANONYMIZED_TELEMETRY: 'False'
+        run: python -m pytest -q
+
+  ios:
+    name: 앱(iOS 시뮬레이터) 테스트
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      AI_AGENT_BRIDGE_KEY: ''
+      AI_AGENT_BRIDGE_URL: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Kotlin 2.3.20 과 맞는 Xcode 26.0.1 을 고른다
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.0.1.app
+          xcodebuild -version
+          xcrun simctl list devices available | grep -E 'iPhone' | head -5
+      - name: Kotlin/Native 도구 캐시
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-provider: basic
+      - name: Gradle 메모리를 러너(7GB)에 맞춘다 — Kotlin/Native 는 Gradle 데몬 안에서 돈다
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m
+          EOF
+      - name: iOS 시뮬레이터 테스트
+        run: ./gradlew :composeApp:iosSimulatorArm64Test --continue
+      - name: 실패한 테스트 보고서
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-test-reports
+          path: composeApp/build/reports/tests
+          retention-days: 14

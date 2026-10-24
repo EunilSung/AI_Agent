@@ -8,7 +8,7 @@
 ![iOS](https://img.shields.io/badge/iOS-18.2%2B-000000?logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-gemma4%3A26b-000000?logo=ollama&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-467%20passing-success)
+[![CI](https://github.com/EunilSung/AI_Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/EunilSung/AI_Agent/actions/workflows/ci.yml)
 
 사내 메신저 쇼케이스 [Talk](https://github.com/EunilSung/Talk_Multiplatform) 에 붙인 AI 에이전트입니다. 세 가지를 합니다.
 
@@ -80,7 +80,7 @@ Talk 의 "AI 요약" 으로 열려 docx 를 요약한 화면(왼쪽 위 "◀ Tal
 ## 아키텍처
 
 ```mermaid
-flowchart LR
+flowchart TD
     TALKAPP["Talk 앱<br/>파일 대화 'AI 요약'"] -->|"aiagent://summarize"| APP
     APP["AI Agent 앱<br/>Android · iOS"] -->|"HTTPS · SSE<br/>접속 키 + Talk 토큰"| BRIDGE["브릿지 :8095<br/>Kotlin · Ktor"]
     BRIDGE -->|"질문 · 요약<br/>(SSE 중계)"| RAG["RAG 서버 :8000<br/>FastAPI · Chroma"]
@@ -266,6 +266,31 @@ cloudflared tunnel --config deploy/tunnel/config.yml run ai-agent
 상시 운영하려면 PC 의 잠자기를 끄고, `deploy/tunnel/config.yml` 을 `/etc/cloudflared/config.yml` 로 복사한 뒤(`credentials-file` 경로를 확인한다)
 `sudo cloudflared service install` 로 부팅 때 터널이 뜨게 합니다(부팅 서비스는 `/etc/cloudflared` 의 설정을 읽습니다). 필요하면 Cloudflare Access 로 접근을 한 겹 더 막습니다.
 Cloudflare Tunnel 은 TLS 를 Cloudflare 에서 풀므로 질문 · 답변 · 요약이 Cloudflare 를 거칩니다(Funnel 은 이 PC 에서 풉니다).
+
+## CI · 릴리스
+
+GitHub Actions(`.github/workflows`)가 테스트와 릴리스를 맡습니다. 비밀값은 하나도 쓰지 않습니다.
+
+| 워크플로 | 언제 | 하는 일 |
+|---|---|---|
+| `CI` | main 에 올린 커밋 · PR | 브릿지 테스트 · 앱 테스트 · 앱 빌드(앱에 접속 키가 들어가지 않았는지 확인) · RAG pytest(Ubuntu), iOS 시뮬레이터 테스트(macOS) |
+| `Release` | `v*` 태그 | 태그가 main 의 커밋이고 앱 `versionName` 과 같은지 확인 → `CI` → 릴리스 파일 → GitHub 릴리스 |
+
+```bash
+# composeApp/build.gradle.kts 의 versionName · versionCode 를 올려 main 에 머지한 뒤
+git tag v<versionName> && git push origin v<versionName>
+```
+
+| 릴리스 파일 | 내용 |
+|---|---|
+| `ai-agent-bridge-<버전>.zip` | 브릿지 실행본(JDK 17). 풀고 `BRIDGE_ACCESS_KEY` 를 환경변수로 준 뒤 `bridge/bin/bridge` 로 띄운다. 키 없이는 뜨지 않는다 |
+| `ai-agent-rag-server-<버전>.zip` | RAG 서버 소스와 샘플 문서 |
+| `SHA256SUMS.txt` | 위 파일들의 SHA-256 |
+
+- **앱(APK · IPA)은 릴리스하지 않습니다.** 접속 키가 앱 안에 들어가 꺼낼 수 있으므로, 키를 가진 사람이 [빌드 & 실행](#빌드--실행)대로 직접 빌드합니다.
+- **자동 배포는 없습니다.** 브릿지 · RAG · Ollama 는 회사 PC 에서 돕니다. 그 PC 를 GitHub 의 self-hosted 러너로 붙이면 공개 저장소의 PR 코드가
+  그 PC 에서 돌 수 있어 붙이지 않았습니다.
+- 공개 저장소라 로그와 아티팩트는 누구나 봅니다. 액션은 커밋 SHA 로 고정했고, 릴리스 작업만 `contents: write` 를 받습니다.
 
 ---
 
