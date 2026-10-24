@@ -1,6 +1,7 @@
 package com.eunilsung.aiagent.data.repository
 
 import com.eunilsung.aiagent.data.local.SessionStore
+import com.eunilsung.aiagent.data.mapper.ChatHistoryWindow
 import com.eunilsung.aiagent.data.mapper.ChatMapper
 import com.eunilsung.aiagent.data.remote.BridgeClient
 import com.eunilsung.aiagent.data.remote.ChatRejectedException
@@ -26,8 +27,9 @@ class AssistantRepositoryImpl(
     private val mapper: ChatMapper,
 ) : AssistantRepository {
 
+    /** 대화 기록은 브릿지 상한 안으로 최근 것만 골라 보낸다([ChatHistoryWindow]). */
     override fun ask(history: List<ChatMessage>): Flow<AnswerEvent> = answer("답변") { token ->
-        bridge.chat(token, ChatRequest(history.map(mapper::toDto)))
+        bridge.chat(token, ChatRequest(ChatHistoryWindow.select(history.map(mapper::toDto))))
     }
 
     override fun summarize(fileId: String, fileName: String): Flow<AnswerEvent> = answer("요약") { token ->

@@ -5,6 +5,7 @@ import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.Conversation
 import com.eunilsung.aiagent.domain.model.LoginResult
 import com.eunilsung.aiagent.domain.model.Person
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.ServiceStatus
 import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.model.User
@@ -63,6 +64,7 @@ interface ConversationRepository {
 interface AssistantRepository {
     /**
      * [history] 의 마지막 질문에 답한다. 실패하면 [com.eunilsung.aiagent.domain.model.AnswerFailure] 를 던진다.
+     * 긴 대화도 계속 쓸 수 있게, 서버에는 마지막 질문과 그 앞의 최근 기록만 서버가 받는 크기 안에서 보낸다.
      */
     fun ask(history: List<ChatMessage>): Flow<AnswerEvent>
 
@@ -103,14 +105,16 @@ interface MessengerRepository {
     suspend fun findPeople(query: String): List<Person>?
 
     /** [person] 과의 1:1 방에 [content] 를 보낸다. [requestId] 가 같으면 Talk 는 한 번만 받는다. */
-    suspend fun send(person: Person, content: String, requestId: String): Boolean
+    suspend fun send(person: Person, content: String, requestId: String): SendResult
 }
 
 /** 브릿지 주소와 연결 상태. */
 interface ServerSettingsRepository {
     val baseUrl: StateFlow<String>
 
-    /** 빈 값을 넣으면 빌드 기본값으로 돌아간다. */
+    /**
+     * 빈 값을 넣으면 빌드 기본값으로 돌아간다. [com.eunilsung.aiagent.domain.util.BridgeAddress] 가 막는 주소는 저장하지 않는다.
+     */
     fun setBaseUrl(url: String)
 
     suspend fun status(): ServiceStatus

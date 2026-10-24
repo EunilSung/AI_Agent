@@ -4,12 +4,16 @@
   글     txt md csv tsv log json xml html htm   UTF-8(BOM 포함) → UTF-16(BOM) → cp949 → 거의 맞는 UTF-8 순서로 읽는다.
                                                 html 은 태그를 걷는다
   PDF    pdf                                    pypdf. 암호가 걸렸으면 encrypted_file, 글자가 거의 없으면(스캔) no_text
-  Office docx xlsx pptx                          python-docx · openpyxl · python-pptx
+  Office docx pptx                               python-docx · python-pptx
+         xlsx                                    직접 흘려 읽는다(openpyxl 은 날짜 서식 판정·날짜 변환에만 쓴다)
   한글   hwpx hwp(5.0)                           hwpx 는 zip 속 XML, hwp 는 OLE 속 레코드(olefile). 옛 HWP 3.x 는 지원하지 않는다
 
 상한
   요약은 앞부분 조각까지만 읽으므로 글은 MAX_TEXT_CHARS 자까지만 뽑고 멈춘다(모든 형식). 작은 파일이 엄청나게 커지는
-  압축 폭탄도 막는다 — HWP 본문은 풀린 크기, zip 은 항목 하나·전체 크기, 흘려 읽는 XML 은 읽는 바이트 수에 끝이 있다.
+  압축 폭탄도 막는다 — HWP 본문은 풀린 크기, zip 은 항목 수·항목 하나·전체 크기, 흘려 읽는 XML 은 읽는 바이트 수에 끝이 있다.
+  라이브러리가 통째로 트리로 펼치는 docx·pptx 의 XML 은 이름·확장자가 아니라 첫머리로 가린다(may_be_xml) — 라이브러리는
+  [Content_Types].xml 이 정한 형식으로 읽으므로 이름을 바꾼 XML 도 펼친다. xlsx·hwpx 는 트리를 만들지 않고 흘려 읽는다
+  (feed_xml) — 들고 있는 것(지금 문단·행, 공유 문자열 등)마다 끝이 있어 XML 모양이 어떻든 메모리가 묶인다.
   상한에 닿아 뒷부분을 읽지 않았으면 Extracted.truncated 로 알린다.
 
 실패는 ExtractError(code, message) 로 알린다. code 는 앱이 이유를 보여 줄 수 있는 SummaryErrorCode 와 같은 값이다.
@@ -17,6 +21,7 @@ LLM 을 부르지 않고 chroma 도 쓰지 않는다 — 테스트에서 따로 
 """
 
 import io
+import posixpath
 import re
 import struct
 import zipfile
@@ -55,13 +60,38 @@ MIN_PDF_CHARS = 20
 # PDF 는 이 쪽 수까지만 읽는다. 빈 쪽 수만 장짜리 파일에서 글자 상한에 닿지 않고 계속 도는 일을 막는다.
 MAX_PDF_PAGES = 2_000
 # zip 으로 싼 문서를 풀었을 때 크기의 끝(작은 파일이 엄청나게 커지는 압축 폭탄).
-# 라이브러리가 통째로 트리로 펼치는 XML(docx·pptx 의 모든 XML, xlsx 의 통합 문서·스타일 등)은 메모리에서 열 배 가까이
-# 불어나므로 하나가 MAX_ZIP_PART_BYTES, 합쳐서 MAX_UNZIPPED_BYTES 까지다. 나머지 — 앞에서부터 흘려 읽는 XML(xlsx 시트·공유
-# 문자열, hwpx 구역)과 XML 이 아닌 항목(그림 등, 읽어도 제 크기만큼만 차지한다) — 는 합쳐서 MAX_UNZIPPED_OTHER_BYTES 까지다.
-# 20MB 짜리 엑셀은 시트가 200MB 가까이 풀리기도 한다.
+# 라이브러리(python-docx·python-pptx)가 통째로 트리로 펼칠 수 있는 항목 — 이름이 아니라 첫머리가 XML 일 수 있는 항목
+# (may_be_xml) — 은 메모리에서 열 배 가까이 불어나므로 하나가 MAX_ZIP_PART_BYTES, 합쳐서 MAX_UNZIPPED_BYTES 까지다.
+# 나머지 — 직접 흘려 읽는 XML(xlsx 전부, hwpx 구역)과 XML 이 아닌 항목(그림 등, 읽어도 제 크기만큼만 차지한다) — 는
+# 합쳐서 MAX_UNZIPPED_OTHER_BYTES 까지다. 20MB 짜리 엑셀은 시트가 200MB 가까이 풀리기도 한다.
 MAX_ZIP_PART_BYTES = 16 * 1024 * 1024
 MAX_UNZIPPED_BYTES = 48 * 1024 * 1024
 MAX_UNZIPPED_OTHER_BYTES = 256 * 1024 * 1024
+# zip 항목 수의 끝. 항목마다 첫머리를 풀어 보므로(may_be_xml_entry) 수만 개짜리 zip 에 오래 붙잡히지 않게 한다.
+MAX_ZIP_ENTRIES = 10_000
+# zip 중앙 디렉터리(항목 목록) 크기의 끝. zipfile 은 열 때 항목마다 ZipInfo(수백 바이트)를 만들어, 빈 항목 수십만 개를 담은
+# 20MB 파일로도 백 MB 넘게 쓴다. 그래서 열기 전에 끝 레코드가 밝힌 크기를 본다(open_zip). 항목 MAX_ZIP_ENTRIES 개에 넉넉하다.
+MAX_ZIP_DIRECTORY_BYTES = 2 * 1024 * 1024
+# XML 일 수 있는지 볼 때 풀어 보는 항목 첫머리의 바이트 수.
+XML_SNIFF_BYTES = 4096
+# 흘려 읽는 XML 을 파서에 한 번에 넣는 바이트 수.
+XML_FEED_BYTES = 64 * 1024
+# xlsx 를 읽는 바이트 수의 끝. 통합 문서·관계·스타일은 항목마다 MAX_ZIP_PART_BYTES, 공유 문자열은
+# MAX_XLSX_STRINGS_READ_BYTES, 시트는 모두 합쳐 MAX_XLSX_SHEETS_READ_BYTES 까지 읽고, 넘으면 앞부분만 쓴다.
+MAX_XLSX_STRINGS_READ_BYTES = 32 * 1024 * 1024
+MAX_XLSX_SHEETS_READ_BYTES = 64 * 1024 * 1024
+# 공유 문자열은 칸이 번호로 가리키므로 리스트로 들고 있어야 한다. 문자열 수와 글자 수에 끝을 둔다 — 넘는 문자열을 가리키는
+# 칸은 빈칸이 되고 truncated 로 알린다. 고르게 반복되는 XML 은 수백 배로 줄어들어 작은 파일에도 문자열 수백만 개를 실을 수 있다.
+MAX_XLSX_STRINGS = 500_000
+MAX_XLSX_STRING_CHARS = 4_000_000
+# 칸 하나의 글자 수 끝(엑셀의 칸 글자 상한과 같다). 넘는 부분은 버린다.
+MAX_CELL_CHARS = 32_767
+# 시트 목록·관계·칸 서식·숫자 서식 수와 시트 이름·서식 글자 수의 끝. 넘는 것은 읽지 않는다.
+MAX_XLSX_SHEETS = 1_000
+MAX_XLSX_RELATIONSHIPS = 10_000
+MAX_XLSX_STYLES = 100_000
+MAX_SHEET_NAME_CHARS = 100
+MAX_FORMAT_CHARS = 255
 # hwpx 구역 XML 은 통째로 펼치지 않고 흘려 읽으며, 구역을 합쳐 이 바이트 수까지만 읽는다(넘으면 앞부분만).
 MAX_HWPX_READ_BYTES = 32 * 1024 * 1024
 # HWP 본문 구역을 풀었을 때 크기 합의 끝. 넘는 부분은 풀지 않는다 — deflate 는 1000 배 가까이 줄어들어 20MB 파일이 수 GB 로 풀린다.
@@ -177,7 +207,7 @@ def sniff(data: bytes) -> str:
         return "hwp" if HWP_SIGNATURE in data else ""
     if data.startswith(ZIP_MAGIC):
         try:
-            names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+            names = set(open_zip(data).namelist())
         except zipfile.BadZipFile:
             return ""
         if "word/document.xml" in names:
@@ -317,34 +347,117 @@ def office_in_ole(data: bytes):
     raise ExtractError(UNSUPPORTED_FILE, "legacy binary Office document")
 
 
-XLSX_LOADED_WHOLE = re.compile(
-    r"\[Content_Types\]\.xml|(.*/)?_rels/[^/]*\.rels|xl/workbook\.xml|xl/styles\.xml"
-    r"|xl/theme/[^/]*|docProps/[^/]*|xl/externalLinks/[^/]*"
+# BOM 과 그 뒤를 읽는 인코딩. UTF-32 를 UTF-16 보다 먼저 본다(UTF-32LE 의 BOM 이 UTF-16LE 의 BOM 으로 시작한다).
+XML_BOMS = (
+    (b"\x00\x00\xfe\xff", "utf-32-be"),
+    (b"\xff\xfe\x00\x00", "utf-32-le"),
+    (b"\xef\xbb\xbf", "utf-8"),
+    (b"\xfe\xff", "utf-16-be"),
+    (b"\xff\xfe", "utf-16-le"),
+)
+# BOM 없이 libxml2(lxml)가 첫 네 바이트로 알아보는 UTF-32·UTF-16·EBCDIC 의 '<'·'<?'.
+XML_UNMARKED_STARTS = (
+    b"\x00\x00\x00<", b"<\x00\x00\x00", b"\x00\x00<\x00", b"\x00<\x00\x00",
+    b"\x00<\x00?", b"<\x00?\x00", b"\x4c\x6f\xa7\x94",
 )
 
-# 형식마다, 라이브러리가 통째로 트리로 펼치는 zip 속 XML 인지. python-docx·python-pptx 는 모든 XML 을 펼치고,
-# openpyxl(read_only)은 시트·공유 문자열을 흘려 읽으며, hwpx 는 manifest 말고는 직접 흘려 읽는다.
-LOADED_WHOLE: dict[str, Callable[[str], bool]] = {
-    "docx": lambda name: True,
-    "pptx": lambda name: True,
-    "xlsx": lambda name: XLSX_LOADED_WHOLE.fullmatch(name) is not None,
-    "hwpx": lambda name: name == "META-INF/manifest.xml",
+
+def may_be_xml(head: bytes) -> bool:
+    """항목 첫머리(head)가 XML 문서의 시작일 수 있는지. 아니라고 할 수 있을 때만 False 다.
+
+    XML 은 BOM 과 공백(빈칸·탭·줄바꿈) 뒤에 '<' 로 시작해야 한다. lxml 이 BOM 없이 알아보는 UTF-16·UTF-32·EBCDIC 의
+    첫머리도 XML 로 본다. head 가 모두 공백이면 뒤에 무엇이 올지 모르므로 XML 로 본다. 그림(PNG·JPEG 등)·동영상·OLE·zip 은
+    첫 바이트가 '<' 가 아니라 False 다.
+    """
+    if head.startswith(XML_UNMARKED_STARTS):
+        return True
+    for bom, encoding in XML_BOMS:
+        if head.startswith(bom):
+            text = head[len(bom):].decode(encoding, errors="ignore")
+            break
+    else:
+        text = head.decode("latin-1")
+    rest = text.lstrip(" \t\r\n")
+    return not rest or rest.startswith("<")
+
+
+def may_be_xml_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    """zip 항목이 XML 일 수 있는지 첫 XML_SNIFF_BYTES 바이트를 풀어 본다. 이름·확장자는 보지 않는다.
+
+    python-docx·python-pptx 는 [Content_Types].xml 이 정한 형식으로 항목을 읽으므로, word/document.xml 을 .bin 으로
+    바꾸고 형식만 밝혀 두면 그 항목도 통째로 트리로 펼친다. 이름으로 가리면 그런 항목이 큰 예산으로 빠져나간다.
+    """
+    if info.is_dir():
+        return False
+    with archive.open(info) as stream:
+        return may_be_xml(stream.read(XML_SNIFF_BYTES))
+
+
+# 형식마다, 라이브러리가 통째로 메모리에 트리로 펼칠 수 있는 zip 항목인지. python-docx·python-pptx 는 XML 항목을 모두
+# 트리로 펼친다. xlsx·hwpx 는 직접 흘려 읽는다 — hwpx 의 manifest 는 바이트 그대로 읽어 들이므로 한 항목 상한만 건다.
+LOADED_WHOLE: dict[str, Callable[[zipfile.ZipFile, zipfile.ZipInfo], bool]] = {
+    "docx": may_be_xml_entry,
+    "pptx": may_be_xml_entry,
+    "xlsx": lambda archive, info: False,
+    "hwpx": lambda archive, info: info.filename == "META-INF/manifest.xml",
 }
 
 
-def check_zip(data: bytes, loaded_whole: Callable[[str], bool]):
+ZIP_END = b"PK\x05\x06"
+ZIP64_END_LOCATOR = b"PK\x06\x07"
+ZIP64_END = b"PK\x06\x06"
+
+
+def zip_directory_size(data: bytes) -> int | None:
+    """zip 끝 레코드가 밝힌 중앙 디렉터리 크기(바이트). 끝 레코드를 찾지 못하면 None.
+
+    zipfile(_EndRecData) 이 찾는 방법과 같다 — 파일 끝 22바이트가 설명 없는 끝 레코드면 그것을, 아니면 마지막 64KB(설명 칸)
+    안의 마지막 끝 레코드를 쓴다. 바로 앞에 ZIP64 위치 레코드가 있으면 그 레코드가 가리키는 곳(없으면 바로 앞)의 ZIP64 끝
+    레코드 값을 쓴다. zipfile 은 이 크기만큼 중앙 디렉터리를 읽어 항목마다 ZipInfo 를 만든다. ZIP64 끝 레코드를 찾지 못하면
+    32비트 값(ZIP64 면 0xFFFFFFFF)이 남아 상한에 걸린다.
+    """
+    end = len(data) - 22
+    if not (end >= 0 and data[end:end + 4] == ZIP_END and data[-2:] == b"\x00\x00"):
+        end = data.rfind(ZIP_END, max(0, len(data) - 22 - 65535))
+        if end < 0 or end + 22 > len(data):
+            return None
+    (size,) = struct.unpack_from("<I", data, end + 12)
+    locator = end - 20
+    if locator < 0 or data[locator:locator + 4] != ZIP64_END_LOCATOR:
+        return size
+    (relative,) = struct.unpack_from("<Q", data, locator + 8)
+    for record in (relative, locator - 56):
+        if 0 <= record <= len(data) - 56 and data[record:record + 4] == ZIP64_END:
+            (size,) = struct.unpack_from("<Q", data, record + 40)
+            break
+    return size
+
+
+def open_zip(data: bytes) -> zipfile.ZipFile:
+    """data 를 zip 으로 연다. 중앙 디렉터리가 MAX_ZIP_DIRECTORY_BYTES 보다 크면 열지 않고 broken_file 이다."""
+    size = zip_directory_size(data)
+    if size is not None and size > MAX_ZIP_DIRECTORY_BYTES:
+        raise ExtractError(BROKEN_FILE, f"zip directory is too large ({size} bytes)")
+    return zipfile.ZipFile(io.BytesIO(data))
+
+
+def check_zip(data: bytes, loaded_whole: Callable[[zipfile.ZipFile, zipfile.ZipInfo], bool]):
     """zip 으로 싼 문서인지, 풀었을 때 지나치게 커지지 않는지 본다(작은 파일이 엄청나게 커지는 압축 폭탄).
 
-    loaded_whole(이름) 이 참인 XML 은 하나가 MAX_ZIP_PART_BYTES, 합쳐서 MAX_UNZIPPED_BYTES 까지.
-    나머지는 합쳐서 MAX_UNZIPPED_OTHER_BYTES 까지. 크기는 zip 이 밝힌 값이고, zipfile 은 그보다 많이 풀어내지 않는다.
+    항목은 MAX_ZIP_ENTRIES 개까지. loaded_whole(archive, 항목) 이 참인 항목은 하나가 MAX_ZIP_PART_BYTES, 합쳐서
+    MAX_UNZIPPED_BYTES 까지, 나머지는 합쳐서 MAX_UNZIPPED_OTHER_BYTES 까지. 크기는 zip 이 밝힌 값이고, zipfile 은
+    그보다 많이 풀어내지 않는다.
     """
     try:
-        infos = zipfile.ZipFile(io.BytesIO(data)).infolist()
+        archive = open_zip(data)
     except zipfile.BadZipFile as e:
         raise ExtractError(BROKEN_FILE, f"not a zip package: {e}") from e
+    infos = archive.infolist()
+    if len(infos) > MAX_ZIP_ENTRIES:
+        raise ExtractError(BROKEN_FILE, f"zip package has too many entries ({len(infos)})")
     tree = other = 0
     for info in infos:
-        if not (info.filename.endswith((".xml", ".rels")) and loaded_whole(info.filename)):
+        if not loaded_whole(archive, info):
             other += info.file_size
             continue
         if info.file_size > MAX_ZIP_PART_BYTES:
@@ -402,41 +515,417 @@ def xlsx_text(data: bytes, sink: TextSink):
     """시트마다 `## 시트: 이름` 아래 행을 ` | ` 로 잇는다. 값은 수식이 아니라 마지막으로 계산된 값을 쓴다.
 
     값이 있는 행이 없는 시트는 건너뛴다. 시트마다 MAX_SHEET_ROWS 행, 모든 시트를 합쳐 MAX_SCAN_ROWS 행(빈 행 포함)까지 본다.
-    """
-    from openpyxl import load_workbook
 
-    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    openpyxl 로 읽지 않는다. openpyxl 은 read_only 에서도 공유 문자열·통합 문서·차트 시트를 통째로 펼치고, 흘려 읽는
+    시트에서도 행 밖의 요소를 버리지 않아(같은 번호가 되풀이되는 행도) 수십 KB 파일로 수 GB 를 쓰게 할 수 있다. 어느 항목을
+    통째로 펼칠지도 [Content_Types].xml 로 정해 이름으로 미리 가릴 수 없다. 여기서는 모든 XML 을 트리 없이 흘려 읽고
+    (feed_xml), 들고 있는 것(시트 목록·칸 서식·공유 문자열·지금 행)과 읽는 바이트 수마다 끝을 둔다. 어느 항목을 읽을지는
+    [Content_Types].xml 이 아니라 관계(.rels)로 정한다.
+    """
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    book = read_xlsx_book(archive, sink)
+    budget = _ByteBudget(MAX_XLSX_SHEETS_READ_BYTES)
+    scan_left = MAX_SCAN_ROWS
+    first_sheet = True
+    for title, part in book.sheets:
+        if scan_left <= 0:
+            break
+        if budget.left <= 0:
+            sink.truncated = True
+            break
+        rows = _SheetRows(title, book, scan_left, sink, first_sheet)
+        if not read_part(archive, part, rows, budget):
+            sink.truncated = True
+        if rows.stopped:
+            return
+        if rows.rows:
+            first_sheet = False
+        scan_left -= rows.scanned
+
+
+XLSX_WORKBOOK = "xl/workbook.xml"
+XLSX_SHARED_STRINGS = "xl/sharedStrings.xml"
+XLSX_STYLES = "xl/styles.xml"
+XLSX_CELL_REFERENCE = re.compile(r"\$?([A-Za-z]{1,3})\$?\d+")
+
+
+def to_int(value) -> int | None:
     try:
-        scan_left = MAX_SCAN_ROWS
-        first_sheet = True
-        for sheet in workbook.worksheets:
-            if scan_left <= 0:
-                break
-            rows = scanned = 0
-            for values in sheet.iter_rows(values_only=True, max_col=MAX_SHEET_COLUMNS, max_row=scan_left):
-                scanned += 1
-                if all(value is None for value in values):
-                    continue
-                line = row_line(cell_text(v) for v in values)
-                if not line:
-                    continue
-                if not rows:
-                    if not first_sheet and not sink.add(""):
-                        return
-                    first_sheet = False
-                    if not sink.add(f"## 시트: {sheet.title}"):
-                        return
-                rows += 1
-                if rows > MAX_SHEET_ROWS:
-                    sink.truncated = True
-                    if not sink.add(f"… ({MAX_SHEET_ROWS}행 이후 생략)"):
-                        return
-                    break
-                if not sink.add(line):
-                    return
-            scan_left -= scanned
-    finally:
-        workbook.close()
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def rels_path_of(part: str) -> str:
+    """zip 항목 part 의 관계 파일 이름(`폴더/_rels/이름.rels`). part 가 빈 문자열이면 꾸러미 전체의 `_rels/.rels`."""
+    folder, base = posixpath.split(part)
+    return posixpath.join(folder, "_rels", f"{base}.rels")
+
+
+class _Relationships:
+    """관계 파일(.rels)을 흘려 읽어 관계 id → (종류, zip 속 이름)을 모은다. 바깥 링크(TargetMode=External)는 뺀다.
+
+    대상 경로는 openpyxl·python-docx 와 같이 맞춘다 — '/' 로 시작하면 꾸러미 맨 위에서, 아니면 `_rels` 의 윗 폴더에서 찾는다.
+    """
+
+    def __init__(self, rels_path: str):
+        self.base = posixpath.split(posixpath.dirname(rels_path))[0]
+        self.items: dict[str, tuple[str, str]] = {}
+
+    def start(self, tag, attrib):
+        if local_name(tag) != "Relationship" or len(self.items) >= MAX_XLSX_RELATIONSHIPS:
+            return
+        if attrib.get("TargetMode") == "External":
+            return
+        target = attrib.get("Target", "")
+        name = target[1:] if target.startswith("/") else posixpath.normpath(posixpath.join(self.base, target))
+        self.items.setdefault(attrib.get("Id", ""), (attrib.get("Type", ""), name))
+
+    def end(self, tag):
+        pass
+
+    def data(self, text):
+        pass
+
+
+class _Workbook:
+    """통합 문서 XML 에서 시트 목록((이름, 관계 id), MAX_XLSX_SHEETS 개까지)과 1904 날짜 체계인지를 읽는다."""
+
+    def __init__(self):
+        self.sheets: list[tuple[str, str]] = []
+        self.date1904 = False
+
+    def start(self, tag, attrib):
+        name = local_name(tag)
+        if name == "sheet" and len(self.sheets) < MAX_XLSX_SHEETS:
+            rid = next((value for key, value in attrib.items() if key.startswith("{") and local_name(key) == "id"), "")
+            if rid:
+                self.sheets.append((attrib.get("name", "")[:MAX_SHEET_NAME_CHARS], rid))
+        elif name == "workbookPr":
+            self.date1904 = attrib.get("date1904", "").strip().lower() in ("1", "true")
+
+    def end(self, tag):
+        pass
+
+    def data(self, text):
+        pass
+
+
+class _Styles:
+    """스타일 XML 에서 숫자 서식(numFmts)과 칸 서식(cellXfs)마다의 숫자 서식 번호를 읽는다(각각 MAX_XLSX_STYLES 개까지)."""
+
+    def __init__(self):
+        self.depth = 0
+        self.section = ""
+        self.custom: dict[int, str] = {}
+        self.cell_formats: list[int] = []
+
+    def start(self, tag, attrib):
+        self.depth += 1
+        name = local_name(tag)
+        if self.depth == 2:
+            self.section = name
+        elif self.depth == 3 and self.section == "numFmts" and name == "numFmt" and len(self.custom) < MAX_XLSX_STYLES:
+            number = to_int(attrib.get("numFmtId"))
+            if number is not None:
+                self.custom[number] = attrib.get("formatCode", "")[:MAX_FORMAT_CHARS]
+        elif self.depth == 3 and self.section == "cellXfs" and name == "xf" and len(self.cell_formats) < MAX_XLSX_STYLES:
+            self.cell_formats.append(to_int(attrib.get("numFmtId", 0)) or 0)
+
+    def end(self, tag):
+        self.depth -= 1
+
+    def data(self, text):
+        pass
+
+    def date_styles(self) -> tuple[set[int], set[int]]:
+        """(날짜·시간 서식인 칸 서식 번호들, 그중 경과 시간([h]:mm 등) 서식인 번호들). openpyxl 이 값을 바꾸는 기준과 같다."""
+        from openpyxl.styles.numbers import builtin_format_code, is_date_format, is_timedelta_format
+
+        dates, durations = set(), set()
+        for index, number in enumerate(self.cell_formats):
+            code = self.custom[number] if number in self.custom else builtin_format_code(number)
+            if is_date_format(code):
+                dates.add(index)
+            if is_timedelta_format(code):
+                durations.add(index)
+        return dates, durations
+
+
+class _SharedStrings:
+    """공유 문자열을 흘려 읽는다. MAX_XLSX_STRINGS 개, 합쳐서 MAX_XLSX_STRING_CHARS 자까지만 모으고 넘으면 full 이다.
+
+    문자열마다 `<t>` 의 글(서식 조각 `<r>` 속 `<t>` 포함)을 잇고, 읽는 법 표시(`<rPh>`)는 뺀다 — openpyxl 과 같다.
+    """
+
+    def __init__(self):
+        self.strings: list[str] = []
+        self.chars = 0
+        self.full = False
+        self.parts: list[str] | None = None
+        self.phonetic = 0
+        self.in_text = False
+
+    def start(self, tag, attrib):
+        name = local_name(tag)
+        if name == "si":
+            if len(self.strings) >= MAX_XLSX_STRINGS:
+                self.full = True
+                raise _StopReading
+            self.parts = []
+        elif name == "rPh":
+            self.phonetic += 1
+        elif name == "t" and self.parts is not None and not self.phonetic:
+            self.in_text = True
+
+    def data(self, text):
+        if not self.in_text:
+            return
+        if self.chars + len(text) > MAX_XLSX_STRING_CHARS:
+            self.full = True
+            raise _StopReading
+        self.parts.append(text)
+        self.chars += len(text)
+
+    def end(self, tag):
+        name = local_name(tag)
+        if name == "t":
+            self.in_text = False
+        elif name == "rPh":
+            self.phonetic = max(0, self.phonetic - 1)
+        elif name == "si" and self.parts is not None:
+            self.strings.append("".join(self.parts).replace("x005F_", ""))
+            self.parts = None
+
+
+class _Book:
+    """xlsx 에서 시트를 읽기 전에 모은 것. sheets 는 (시트 이름, zip 속 시트 항목)이고 차트 시트는 뺐다."""
+
+    def __init__(self, sheets: list[tuple[str, str]], strings: list[str], styles: _Styles, date1904: bool):
+        from openpyxl.utils.datetime import CALENDAR_MAC_1904, CALENDAR_WINDOWS_1900, from_excel, from_ISO8601
+
+        self.sheets = sheets
+        self.strings = strings
+        self.dates, self.durations = styles.date_styles()
+        self.epoch = CALENDAR_MAC_1904 if date1904 else CALENDAR_WINDOWS_1900
+        self.from_excel = from_excel
+        self.from_iso = from_ISO8601
+
+    def value(self, kind: str, style: int | None, raw: str | None, inline: str | None):
+        """칸 하나의 값. openpyxl(read_only, data_only)이 내놓는 값과 같게 만든다 — 공유 문자열은 글로, 날짜 서식의 숫자는
+        날짜·시간으로 바꾸고, 수식은 마지막으로 계산된 값(`<v>`)을 쓴다. 읽을 수 없는 값은 글 그대로 둔다(openpyxl 은 실패한다).
+        """
+        if kind == "inlineStr":
+            return inline
+        if not raw:
+            return None
+        try:
+            if kind == "s":
+                index = int(raw)
+                return self.strings[index] if 0 <= index < len(self.strings) else ""
+            if kind == "b":
+                return bool(int(raw))
+            if kind == "d":
+                return self.from_iso(raw)
+            if kind != "n":
+                return raw
+            number = float(raw) if any(mark in raw for mark in ".Ee") else int(raw)
+        except ValueError:
+            return raw
+        if style not in self.dates:
+            return number
+        try:
+            return self.from_excel(number, self.epoch, timedelta=style in self.durations)
+        except (OverflowError, ValueError):
+            return "#VALUE!"
+
+
+def xlsx_relationships(archive: zipfile.ZipFile, names: set[str], part: str) -> dict[str, tuple[str, str]]:
+    """part 의 관계(관계 id → (종류, zip 속 이름)). part 가 빈 문자열이면 꾸러미 전체의 관계. 관계 파일이 없으면 빈 dict."""
+    path = rels_path_of(part)
+    if path not in names:
+        return {}
+    handler = _Relationships(path)
+    read_part(archive, path, handler, _ByteBudget(MAX_ZIP_PART_BYTES))
+    return handler.items
+
+
+def related_part(rels: dict[str, tuple[str, str]], kind: str) -> str | None:
+    """관계 종류가 `/kind` 로 끝나는 첫 관계의 zip 속 이름."""
+    return next((name for type_, name in rels.values() if type_.endswith("/" + kind)), None)
+
+
+def read_xlsx_book(archive: zipfile.ZipFile, sink: TextSink) -> _Book:
+    """통합 문서(꾸러미 관계의 officeDocument, 없으면 xl/workbook.xml)·그 관계·스타일·공유 문자열을 읽는다.
+
+    통합 문서나 공유 문자열을 끝까지 읽지 못했으면 sink.truncated 를 세운다.
+    """
+    names = set(archive.namelist())
+    workbook_part = related_part(xlsx_relationships(archive, names, ""), "officeDocument") or XLSX_WORKBOOK
+    if workbook_part not in names:
+        raise ExtractError(BROKEN_FILE, "xlsx has no workbook")
+    workbook = _Workbook()
+    if not read_part(archive, workbook_part, workbook, _ByteBudget(MAX_ZIP_PART_BYTES)):
+        sink.truncated = True
+    rels = xlsx_relationships(archive, names, workbook_part)
+
+    styles = _Styles()
+    styles_part = related_part(rels, "styles") or XLSX_STYLES
+    if styles_part in names:
+        read_part(archive, styles_part, styles, _ByteBudget(MAX_ZIP_PART_BYTES))
+
+    strings = _SharedStrings()
+    strings_part = related_part(rels, "sharedStrings") or XLSX_SHARED_STRINGS
+    if strings_part in names:
+        complete = read_part(archive, strings_part, strings, _ByteBudget(MAX_XLSX_STRINGS_READ_BYTES))
+        if not complete or strings.full:
+            sink.truncated = True
+
+    sheets = []
+    for title, rid in workbook.sheets:
+        kind, part = rels.get(rid, ("", ""))
+        if part in names and "chartsheet" not in kind:
+            sheets.append((title, part))
+    return _Book(sheets, strings.strings, styles, workbook.date1904)
+
+
+def column_number(letters: str) -> int:
+    number = 0
+    for letter in letters.upper():
+        number = number * 26 + ord(letter) - ord("A") + 1
+    return number
+
+
+class _SheetRows:
+    """시트 XML 하나를 흘려 읽어 값이 있는 행마다 sink 에 한 줄(` | ` 로 이은 칸)로 담는다.
+
+    트리를 만들지 않는다 — 들고 있는 것은 지금 행의 앞 MAX_SHEET_COLUMNS 칸(칸마다 MAX_CELL_CHARS 자)뿐이다.
+    행 번호는 r 속성(없거나 이상하면 앞 행 + 1)이다. openpyxl 의 read_only 와 같이, 앞서 내놓은 행 번호보다 작거나 같은
+    행은 건너뛰고, 빠진 번호도 빈 행으로 센다(scanned). scan_limit 번째를 넘는 행이 나오면 그만 읽는다.
+    처음으로 값이 있는 행 앞에 `## 시트: 이름` 을 적는다(첫 시트가 아니면 빈 줄을 먼저). 시트마다 MAX_SHEET_ROWS 행까지 적고,
+    sink 가 차면 stopped 를 세우고 그만 읽는다.
+    """
+
+    def __init__(self, title: str, book: _Book, scan_limit: int, sink: TextSink, first_sheet: bool):
+        self.title = title
+        self.book = book
+        self.scan_limit = scan_limit
+        self.sink = sink
+        self.first_sheet = first_sheet
+        self.scanned = 0
+        self.rows = 0
+        self.stopped = False
+        self.next_row = 1
+        self.row_number = 0
+        self.depth = 0
+        self.row_depth = 0
+        self.cells: dict[int, object] = {}
+        self.column = 0
+        self.cell_depth = 0
+        self.kind = "n"
+        self.style: int | None = 0
+        self.value: list[str] | None = None
+        self.inline: list[str] | None = None
+        self.inline_depth = 0
+        self.target: list[str] | None = None
+        self.cell_chars = 0
+        self.phonetic = 0
+
+    def start(self, tag, attrib):
+        self.depth += 1
+        name = local_name(tag)
+        if self.cell_depth:
+            if name == "v" and self.depth == self.cell_depth + 1:
+                self.value = self.target = []
+            elif name == "is" and self.depth == self.cell_depth + 1:
+                self.inline = []
+                self.inline_depth = self.depth
+            elif name == "rPh":
+                self.phonetic += 1
+            elif name == "t" and self.inline_depth and not self.phonetic:
+                self.target = self.inline
+        elif self.row_depth:
+            if name == "c" and self.depth == self.row_depth + 1:
+                reference = XLSX_CELL_REFERENCE.fullmatch(attrib.get("r", ""))
+                self.column = column_number(reference.group(1)) if reference else self.column + 1
+                self.cell_depth = self.depth
+                self.kind = attrib.get("t", "n")
+                self.style = to_int(attrib.get("s", 0))
+                self.value = self.inline = self.target = None
+                self.inline_depth = self.cell_chars = self.phonetic = 0
+        elif name == "row":
+            number = to_int(attrib.get("r"))
+            self.row_number = number if number is not None else self.row_number + 1
+            self.row_depth = self.depth
+            self.cells = {}
+            self.column = 0
+
+    def data(self, text):
+        if self.target is None or self.cell_chars >= MAX_CELL_CHARS:
+            return
+        text = text[:MAX_CELL_CHARS - self.cell_chars]
+        self.target.append(text)
+        self.cell_chars += len(text)
+
+    def end(self, tag):
+        depth = self.depth
+        self.depth -= 1
+        if self.cell_depth:
+            name = local_name(tag)
+            if depth == self.cell_depth:
+                self.cell_depth = 0
+                self.finish_cell()
+            elif depth == self.inline_depth:
+                self.inline_depth = 0
+                self.target = None
+            elif name in ("v", "t"):
+                self.target = None
+            elif name == "rPh":
+                self.phonetic = max(0, self.phonetic - 1)
+        elif self.row_depth and depth == self.row_depth:
+            self.row_depth = 0
+            self.finish_row()
+
+    def finish_cell(self):
+        self.target = None
+        if not 1 <= self.column <= MAX_SHEET_COLUMNS:
+            return
+        raw = "".join(self.value) if self.value is not None else None
+        inline = "".join(self.inline) if self.inline is not None else None
+        self.cells[self.column] = self.book.value(self.kind, self.style, raw, inline)
+
+    def finish_row(self):
+        number = self.row_number
+        if number > self.scan_limit:
+            self.scanned = self.scan_limit
+            raise _StopReading
+        if number < self.next_row:
+            return
+        self.next_row = number + 1
+        self.scanned = number
+        values = [self.cells.get(column) for column in range(1, max(self.cells, default=0) + 1)]
+        if all(value is None for value in values):
+            return
+        line = row_line(cell_text(value) for value in values)
+        if not line:
+            return
+        if not self.rows:
+            if not self.first_sheet and not self.sink.add(""):
+                self.stop()
+            if not self.sink.add(f"## 시트: {self.title}"):
+                self.stop()
+        self.rows += 1
+        if self.rows > MAX_SHEET_ROWS:
+            self.sink.truncated = True
+            if not self.sink.add(f"… ({MAX_SHEET_ROWS}행 이후 생략)"):
+                self.stopped = True
+            raise _StopReading
+        if not self.sink.add(line):
+            self.stop()
+
+    def stop(self):
+        self.stopped = True
+        raise _StopReading
 
 
 def pptx_text(data: bytes, sink: TextSink):
@@ -506,10 +995,44 @@ class _LimitedReader:
         return chunk
 
 
+class _StopReading(Exception):
+    """흘려 읽던 XML 을 그만 읽는다(글·행 상한에 닿음). 처리기가 던지고 feed_xml 이 받는다."""
+
+
+def feed_xml(stream, handler) -> bool:
+    """stream 의 XML 을 XML_FEED_BYTES 씩 읽어 handler(start·end·data 를 받는 처리기)에 넘긴다. 트리를 만들지 않는다.
+
+    메모리에 남는 것은 handler 가 모으는 것과, 파서가 아직 다 읽지 못한 토큰 하나(태그·속성)뿐이다 — 글은 조각으로 온다.
+    handler 가 _StopReading 을 던져 멈췄으면 False, 끝까지 읽었으면 True. 깨진 XML 이면 ElementTree.ParseError 다.
+    """
+    parser = ElementTree.XMLParser(target=handler)
+    try:
+        while chunk := stream.read(XML_FEED_BYTES):
+            parser.feed(chunk)
+        parser.close()
+    except _StopReading:
+        return False
+    return True
+
+
+def read_part(archive: zipfile.ZipFile, name: str, handler, budget: _ByteBudget) -> bool:
+    """zip 항목 name 을 budget 이 남은 만큼만 handler 에 흘려 넣는다. budget 에 닿아 뒷부분을 읽지 못했으면 False.
+
+    budget 에 닿아 XML 이 중간에 끊긴 것은 깨진 파일로 보지 않는다. handler 가 스스로 멈춘 것은 handler 가 안다.
+    """
+    with archive.open(name) as stream:
+        try:
+            feed_xml(_LimitedReader(stream, budget), handler)
+        except ElementTree.ParseError:
+            if not budget.cut:
+                raise
+    return not budget.cut
+
+
 def hwpx_text(data: bytes, sink: TextSink):
     """`Contents/section*.xml` 을 번호 순서대로 흘려 읽어 문단(`<hp:p>`)마다 한 줄로. 표 칸 속 문단도 각자 한 줄이 된다.
 
-    구역 XML 을 통째로 펼치지 않고, 다 읽은 요소는 버린다. 구역을 합쳐 MAX_HWPX_READ_BYTES 까지만 읽는다.
+    구역 XML 로 트리를 만들지 않는다(hwpx_section_lines). 구역을 합쳐 MAX_HWPX_READ_BYTES 까지만 읽는다.
     """
     archive = zipfile.ZipFile(io.BytesIO(data))
     names = archive.namelist()
@@ -543,38 +1066,71 @@ def hwpx_text(data: bytes, sink: TextSink):
 
 def hwpx_section_lines(source, sink: TextSink) -> bool:
     """구역 XML 하나를 흘려 읽어 문단마다 sink 에 담는다. sink 가 차서 멈췄으면 False."""
-    current: list[str] = []
-    stack: list[ElementTree.Element] = []
+    paragraphs = _HwpxParagraphs(sink)
+    return feed_xml(source, paragraphs) and paragraphs.flush()
 
-    def flush() -> bool:
-        line = "".join(current).strip()
-        current.clear()
-        return sink.add(line) if line else True
 
-    for event, element in ElementTree.iterparse(source, events=("start", "end")):
-        tag = local_name(element.tag)
-        if event == "start":
-            stack.append(element)
-            if tag == "p" and not flush():
-                return False
-            continue
-        stack.pop()
-        if tag == "t":
-            current.append(element.text or "")
-            for child in element:
-                child_tag = local_name(child.tag)
-                if child_tag == "tab":
-                    current.append("\t")
-                elif child_tag == "lineBreak":
-                    current.append("\n")
-                elif child_tag in ("fwSpace", "nbSpace"):
-                    current.append(" ")
-                current.append(child.tail or "")
-        elif tag == "p" and not flush():
-            return False
-        if stack and local_name(stack[-1].tag) != "t":
-            stack[-1].remove(element)
-    return flush()
+# `<hp:t>` 바로 안의 표시 요소를 글로 바꾼 것
+HWPX_TEXT_MARKS = {"tab": "\t", "lineBreak": "\n", "fwSpace": " ", "nbSpace": " "}
+
+
+class _HwpxParagraphs:
+    """hwpx 구역 XML 의 문단(`<hp:p>`)마다 글을 모아 sink 에 한 줄로 담는다. 트리를 만들지 않는다.
+
+    글은 `<hp:t>` 바로 안의 글만 모으고, `<hp:t>` 바로 안의 탭·줄바꿈·빈칸 표시는 HWPX_TEXT_MARKS 로 바꾼다.
+    문단 안에서 문단이 열리면(표 칸) 그때까지 모은 바깥 문단의 글을 먼저 한 줄로 내보낸다. 한 문단의 글은 sink 에 들어갈
+    만큼까지만 모은다. sink 가 차면 _StopReading 을 던진다.
+    """
+
+    def __init__(self, sink: TextSink):
+        self.sink = sink
+        self.current: list[str] = []
+        self.length = 0
+        self.dropped = False
+        self.depth = 0
+        self.text_depth = 0
+
+    def start(self, tag, attrib):
+        self.depth += 1
+        name = local_name(tag)
+        if self.text_depth:
+            if self.depth == self.text_depth + 1 and name in HWPX_TEXT_MARKS:
+                self.append(HWPX_TEXT_MARKS[name])
+        elif name == "p":
+            if not self.flush():
+                raise _StopReading
+        elif name == "t":
+            self.text_depth = self.depth
+
+    def data(self, text):
+        if self.text_depth and self.depth == self.text_depth:
+            self.append(text)
+
+    def end(self, tag):
+        depth = self.depth
+        self.depth -= 1
+        if self.text_depth:
+            if depth == self.text_depth:
+                self.text_depth = 0
+        elif local_name(tag) == "p" and not self.flush():
+            raise _StopReading
+
+    def append(self, text: str):
+        if self.length >= self.sink.limit:
+            self.dropped = True
+            return
+        self.current.append(text)
+        self.length += len(text)
+
+    def flush(self) -> bool:
+        """모은 문단 글을 한 줄로 내보낸다. sink 가 차서 더 받지 않으면 False."""
+        line = "".join(self.current).strip()
+        if self.dropped:
+            self.sink.truncated = True
+        self.current.clear()
+        self.length = 0
+        self.dropped = False
+        return self.sink.add(line) if line else True
 
 
 HWPTAG_PARA_TEXT = 67

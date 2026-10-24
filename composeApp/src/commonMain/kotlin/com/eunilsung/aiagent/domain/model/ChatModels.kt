@@ -32,6 +32,11 @@ data class ChatMessage(
     val sendRequest: SendRequest? = null,
     /** 긴 문서를 나눠 읽는 중이면 얼마나 읽었는지. 받는 동안 화면에만 있고 기기 DB 에는 저장하지 않는다. */
     val progress: AnswerEvent.Progress? = null,
+    /**
+     * Talk 파일 요약의 질문("파일명 요약해 줘")이나 요약 답변이면 true. 파일은 남이 올린 것이라 요약에 숨긴 지시가 섞여 나올 수
+     * 있다 — 대화 기록으로 보낼 때 이 표시를 함께 보내, RAG 서버가 지시가 아닌 자료로 감싸 LLM 에 넣게 한다.
+     */
+    val summary: Boolean = false,
 )
 
 enum class ChatRole { User, Assistant }
@@ -117,6 +122,28 @@ sealed class AnswerFailure : Exception() {
     data object FileNotFound : AnswerFailure()
     /** 요약할 수 있는 크기(20MB)를 넘는 파일이다. */
     data object FileTooLarge : AnswerFailure()
+    /** 브릿지가 [refusal] 때문에 받지 않았다. */
+    data class Refused(val refusal: BridgeRefusal) : AnswerFailure()
+}
+
+/**
+ * 브릿지가 요청을 받지 않은 이유 가운데 어느 요청(로그인·대화·요약·보내기·연결 확인)에서나 올 수 있는 것.
+ * 화면은 이유마다 정해진 문구(ko/en)를 보인다.
+ */
+enum class BridgeRefusal {
+    /** 이 앱에 들어간 접속 키가 브릿지의 키와 다르다. 맞는 키로 다시 빌드한 앱을 깔아야 한다. */
+    ClientKeyInvalid,
+    /**
+     * 서버 주소가 빌드 때 정한 브릿지(또는 로컬 주소)가 아니라 접속 키를 싣지 않았고, 브릿지가 키가 없다고 거절했다.
+     * 설정에서 주소를 기본값으로 되돌리거나, 이 주소로 다시 빌드한 앱을 깔아야 한다.
+     */
+    AccessKeyNotSent,
+    /** 이 계정은 이 브릿지를 쓸 수 없다(허용 사용자 목록 밖). */
+    UserNotAllowed,
+    /** 보낸 내용이 그 요청이 받는 크기보다 크다. 다시 보내도 같은 답이다. */
+    PayloadTooLarge,
+    /** 브릿지가 지금 하는 일이 많아 받지 않았다. 잠시 뒤 다시 하면 된다. */
+    Busy,
 }
 
 /** 로그인 결과. */
@@ -127,13 +154,28 @@ sealed interface LoginResult {
     data object Locked : LoginResult
     data object Unreachable : LoginResult
     data object Failed : LoginResult
+    /** 브릿지가 [refusal] 때문에 받지 않았다. */
+    data class Refused(val refusal: BridgeRefusal) : LoginResult
 }
 
-/** 설정 화면의 연결 상태. 브릿지에 닿지 못하면 [bridge] 가 false 이고 나머지는 모른다. */
+/** Talk 메시지 보내기 결과. */
+sealed interface SendResult {
+    data object Sent : SendResult
+
+    /** 보내지 못했다. [refusal] 이 있으면 브릿지가 그 이유로 받지 않은 것이고, 없으면 다시 보내면 될 수 있다. */
+    data class Failed(val refusal: BridgeRefusal? = null) : SendResult
+}
+
+/**
+ * 설정 화면의 연결 상태. 브릿지에 닿지 못하면 [bridge] 가 false 이고 나머지는 모른다.
+ *
+ * @property refusal 브릿지에 닿았지만 받지 않았으면 그 이유(접속 키가 다를 때 등).
+ */
 data class ServiceStatus(
     val bridge: Boolean,
     val talk: Boolean = false,
     val chatModel: String? = null,
     val embedModel: String? = null,
     val chunks: Int? = null,
+    val refusal: BridgeRefusal? = null,
 )

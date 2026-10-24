@@ -37,7 +37,9 @@ object TestTags {
     const val SETTING_STATUS_BRIDGE = "setting_status_bridge"
 
     const val DIALOG_CONFIRM = "dialog_confirm"
-    /** 제목이 있는 알림의 제목 — Talk 요약 링크의 로그인 안내. */
+    /** 두 버튼 대화상자의 [취소] — Talk 요약 링크의 계정 바꾸기 물음 등. */
+    const val DIALOG_CANCEL = "dialog_cancel"
+    /** 제목이 있는 알림·확인 대화상자의 제목 — Talk 요약 링크의 로그인 안내·계정 바꾸기 물음. Talk 의 실화면 흐름도 이것을 본다. */
     const val DIALOG_TITLE = "dialog_title"
 
     /** 화면 아래에 잠깐(2초) 떴다 사라지는 토스트의 글 — 요약 취소 안내 등. */

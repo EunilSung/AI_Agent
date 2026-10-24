@@ -1,6 +1,7 @@
 appId: com.eunilsung.aiagent
-name: 추천 질문에 문서 근거로 답한다
-# 로그인 → 새 대화 → 추천 질문 → 답변과 근거 문서가 보이는지.
+name: 추천 질문에 문서로 답한다
+# 로그인 → 새 대화 → 추천 질문 → 답변이 오고, 근거 문서 칩은 보이지 않는지.
+# 근거 칩·다시 쓴 검색어는 Config.Chat.IS_SOURCES_ENABLED·IS_SEARCH_QUERY_ENABLED 로 꺼 두었다. 그 값을 바꾸면 이 흐름도 함께 바꾼다.
 # 브릿지(8095)·RAG 서버(8000)·Talk 로컬 서버(8090)·Ollama 가 떠 있어야 한다.
 ---
 - runFlow: ../common/login.yaml
@@ -17,6 +18,7 @@ name: 추천 질문에 문서 근거로 답한다
       id: chat_answer
     timeout: 90000
     label: 답변을 다 받으면 말풍선에 chat_answer 가 붙는다
-- assertVisible:
+- assertNotVisible:
     id: chat_source
+    label: 근거 문서 칩은 config 로 꺼 두어 보이지 않는다
 - takeScreenshot: chat-answer

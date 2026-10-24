@@ -13,6 +13,8 @@ data class LoginUiState(
     val serverUrl: String = "",
     /** 서버 주소를 고치는 중이면 입력 중인 값, 아니면 null. */
     val serverInput: String? = null,
+    /** 저장하려던 서버 주소가 https 도 에뮬레이터·시뮬레이터 주소도 아니라 저장하지 않았다. 입력을 고치면 지운다. */
+    val isServerInvalid: Boolean = false,
 ) {
     /** 아이디와 비밀번호를 다 넣었고 로그인 중이 아니면 로그인 버튼을 누를 수 있다. */
     val canSubmit: Boolean

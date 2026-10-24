@@ -13,6 +13,8 @@ SSE 순서 (앱·브릿지와의 계약은 shared 의 ChatApi.kt)
   : ping                           보낼 것이 PING_SECONDS 동안 없으면 (글 뽑기·조각 읽기·첫 글자 기다리기)
 
 `: connected` 는 글을 뽑기 전에 보낸다. 글 뽑기·다듬기·나누기는 글 전체를 훑으므로 이벤트 루프 밖(스레드)에서 한다.
+글 뽑기는 메모리·CPU 를 많이 쓰고 스레드는 취소되지 않으므로, 한꺼번에 MAX_CONCURRENT_EXTRACTS 개까지만 돌린다
+(run_extraction — 앱이 끊어도 스레드가 끝날 때까지 자리를 돌려주지 않는다).
 
 파일 이름은 URL 쿼리가 아니라 NAME_HEADER 헤더(UTF-8 퍼센트 인코딩)로 받는다. 요청 줄은 uvicorn 접근 로그에 그대로
 남기 때문이다 — 브릿지가 로그에 파일 이름을 남기지 않는 것과 같은 기준이다. 서버 로그에는 확장자만 남긴다.
@@ -25,6 +27,7 @@ import math
 import re
 import time
 import urllib.parse
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
@@ -50,6 +53,9 @@ MAX_NAME_CHARS = 255
 PING_SECONDS = 10
 # 브릿지가 요약할 파일의 이름을 싣는 요청 헤더(bridge 의 RagClient.FILE_NAME_HEADER 와 같다).
 NAME_HEADER = "X-File-Name"
+
+# 한꺼번에 돌리는 글 뽑기 수의 끝. 브릿지도 요약 동시 실행을 묶지만, 여기서도 따로 묶는다.
+MAX_CONCURRENT_EXTRACTS = 2
 
 PIECE_MAX_TOKENS = 900
 SUMMARY_MAX_TOKENS = 1_500
@@ -264,6 +270,42 @@ class Prepared:
     chars: int
 
 
+_extract_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+
+
+def extract_slots() -> asyncio.Semaphore:
+    """지금 이벤트 루프의 글 뽑기 자리. 루프마다 따로 둔다(테스트는 루프를 여러 번 만든다)."""
+    loop = asyncio.get_running_loop()
+    slots = _extract_slots.get(loop)
+    if slots is None:
+        slots = _extract_slots[loop] = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTS)
+    return slots
+
+
+async def run_extraction(fn: Callable[..., "Prepared"], *args) -> "Prepared":
+    """fn(*args) 를 스레드에서 돌린다. 자리(extract_slots)가 날 때까지 기다리고, 스레드가 끝나야 자리를 돌려준다.
+
+    asyncio.to_thread 를 기다리던 쪽이 취소돼도(앱이 연결을 끊음) 스레드는 끝까지 돈다. 그때 자리를 먼저 돌려주면
+    끊고 다시 보내기를 되풀이해 상한보다 많은 글 뽑기를 동시에 돌릴 수 있으므로, 스레드가 끝날 때 돌려준다.
+    """
+    slots = extract_slots()
+    await slots.acquire()
+    loop = asyncio.get_running_loop()
+    try:
+        future = loop.run_in_executor(None, fn, *args)
+    except BaseException:
+        slots.release()
+        raise
+
+    def finished(done: asyncio.Future):
+        slots.release()
+        if not done.cancelled():
+            done.exception()  # 아무도 기다리지 않게 된 실패도 '읽지 않은 예외' 경고를 남기지 않게 꺼내 둔다
+
+    future.add_done_callback(finished)
+    return await asyncio.shield(future)
+
+
 def prepare_text(name: str, data: bytes) -> Prepared:
     """글을 뽑아 다듬고, 길면 앞 MAX_PIECES 조각으로 나눈다. 글 전체를 훑는 일이라 스레드에서 부른다.
 
@@ -288,7 +330,7 @@ async def summary_events(name: str, data: bytes, llm: Llm, prompts: SummaryPromp
     """글을 뽑아 짧으면 한 번에, 길면 조각마다 메모(progress)를 받은 뒤 합쳐서 요약 조각(delta)을 내놓는다."""
     name = clean_name(name)
     started = time.monotonic()
-    prepared = await asyncio.to_thread(prepare_text, name, data)
+    prepared = await run_extraction(prepare_text, name, data)
     kind = extension_of(name) or "?"
 
     if not prepared.pieces:

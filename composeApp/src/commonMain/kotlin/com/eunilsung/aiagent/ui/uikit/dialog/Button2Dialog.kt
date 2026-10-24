@@ -33,6 +33,10 @@ import androidx.compose.ui.platform.testTag
 import com.eunilsung.aiagent.ui.uikit.TestTags
 import com.eunilsung.aiagent.ui.uikit.exposeTestTags
 
+/**
+ * 두 버튼 대화상자. [onConfirm] 은 확인을, [onDismiss] 는 취소를 뜻한다 — 확인을 눌러도 취소 쪽을 부르지 않는다.
+ * 닫는 일은 부르는 쪽([DialogHost])이 각 콜백에서 한다.
+ */
 @Composable
 fun Button2Dialog(
     onDismissRequest: () -> Unit,
@@ -73,7 +77,7 @@ fun Button2Dialog(
                 ) {
                     if (dismissText != null) {
                         ButtonV1(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).testTag(TestTags.DIALOG_CANCEL),
                             text = dismissText,
                             containerColor = AppColors.DialogCancelBtnBg,
                             contentColor = AppColors.TextSub,
@@ -86,10 +90,7 @@ fun Button2Dialog(
                         text = confirmText,
                         containerColor = if (confirmText == stringResource(Res.string.delete)
                             || confirmText == stringResource(Res.string.leave)) AppColors.Out else AppColors.PrimaryMain,
-                        onClick = {
-                            onDismiss()
-                            onConfirm()
-                        }
+                        onClick = onConfirm
                     )
                 }
             }

@@ -32,16 +32,23 @@ class LoginViewModel(
             LoginActions.OnLoginClick -> login()
             LoginActions.OnResetStatus -> _uiState.update { it.copy(status = LoginStatus.Idle) }
             LoginActions.OnToggleServerEdit -> _uiState.update {
-                it.copy(serverInput = if (it.serverInput == null) it.serverUrl else null)
+                it.copy(serverInput = if (it.serverInput == null) it.serverUrl else null, isServerInvalid = false)
             }
-            is LoginActions.OnServerInputChange -> _uiState.update { it.copy(serverInput = action.url) }
-            LoginActions.OnServerSave -> {
-                _uiState.value.serverInput?.let { loginUseCases.setServerUrl(it) }
-                _uiState.update { it.copy(serverInput = null) }
-            }
+            is LoginActions.OnServerInputChange -> _uiState.update { it.copy(serverInput = action.url, isServerInvalid = false) }
+            LoginActions.OnServerSave -> saveServer()
             is LoginActions.OnAccountRequested -> _uiState.update {
                 it.copy(id = action.id.trim(), pw = "", isPasswordVisible = false)
             }
+        }
+    }
+
+    /** 쓸 수 없는 주소면 저장하지 않고 입력칸을 연 채로 안내한다. */
+    private fun saveServer() {
+        val input = _uiState.value.serverInput ?: return
+        if (loginUseCases.setServerUrl(input)) {
+            _uiState.update { it.copy(serverInput = null, isServerInvalid = false) }
+        } else {
+            _uiState.update { it.copy(isServerInvalid = true) }
         }
     }
 

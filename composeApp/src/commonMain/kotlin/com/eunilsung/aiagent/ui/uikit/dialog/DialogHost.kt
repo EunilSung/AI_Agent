@@ -10,8 +10,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.eunilsung.aiagent.ui.theme.AppColors
+import com.eunilsung.aiagent.ui.uikit.TestTags
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -44,6 +48,15 @@ fun DialogHost(content: @Composable () -> Unit) {
                 onDismissRequest = {
                     request = null
                     req.onCancel()
+                },
+                title = {
+                    Text(
+                        text = req.title,
+                        color = AppColors.Text,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag(TestTags.DIALOG_TITLE),
+                    )
                 },
                 description = {
                     Text(

@@ -18,6 +18,12 @@
     <string name="login_fail_unreachable">서버에 연결하지 못했습니다. 설정에서 서버 주소를 확인해 주세요.</string>
     <string name="login_fail">로그인하지 못했습니다.</string>
     <string name="login_server_label">서버: %1$s</string>
+    <string name="server_url_invalid">https 주소나 에뮬레이터·시뮬레이터 주소(10.0.2.2·localhost·127.0.0.1)만 쓸 수 있어요.</string>
+    <string name="refusal_client_key_invalid">이 앱은 서버에 접속할 수 없어요. 맞는 접속 키로 만든 앱을 설치해 주세요.</string>
+    <string name="refusal_access_key_not_sent">이 서버 주소에는 접속 키를 보내지 않아요. 설정에서 서버 주소를 기본값으로 되돌리거나, 이 주소로 만든 앱을 설치해 주세요.</string>
+    <string name="refusal_user_not_allowed">이 계정은 AI Agent 를 쓸 수 없어요. 관리자에게 문의해 주세요.</string>
+    <string name="refusal_payload_too_large">보낼 내용이 너무 길어요. 줄이거나 새 대화에서 다시 시도해 주세요.</string>
+    <string name="refusal_busy">지금 요청이 많아 처리하지 못했어요. 잠시 후 다시 시도해 주세요.</string>
 
     <string name="tab_chat">AI 대화</string>
     <string name="tab_setting">설정</string>
@@ -74,6 +80,7 @@
     <string name="setting_server_hint">에뮬레이터 http://10.0.2.2:8095 · 시뮬레이터 http://localhost:8095 · 터널 https://…</string>
     <string name="setting_server_save">저장</string>
     <string name="setting_server_reset">기본값</string>
+    <string name="toast_setting_server_invalid">저장하지 않았어요. https 주소나 에뮬레이터·시뮬레이터 주소(10.0.2.2·localhost·127.0.0.1)만 쓸 수 있어요.</string>
     <string name="toast_setting_server_saved">서버 주소를 저장했습니다.</string>
     <string name="setting_status">연결 상태</string>
     <string name="setting_status_refresh">확인</string>
@@ -83,6 +90,8 @@
     <string name="setting_status_docs">문서</string>
     <string name="setting_status_chunks">조각 %1$d개</string>
     <string name="setting_status_ok">연결됨</string>
+    <string name="setting_status_key_invalid">접속 키 불일치</string>
+    <string name="setting_status_key_not_sent">다른 서버 — 접속 키 보내지 않음</string>
     <string name="setting_status_down">연결 안 됨</string>
     <string name="setting_status_checking">확인 중…</string>
     <string name="date_time">%1$s %2$d:%3$s</string>
@@ -93,10 +102,11 @@
 
     <string name="summary_question">%1$s 요약해 줘</string>
     <string name="summary_reading">문서를 읽는 중이에요 (%1$d/%2$d)</string>
-    <string name="summary_login_title_other">다른 계정의 요청이에요</string>
+    <string name="summary_switch_title">다른 계정의 요청이에요</string>
+    <string name="summary_switch_message">Talk 파일 요약을 요청한 계정이 달라요. 지금 %1$s 계정에서 로그아웃하고 %2$s 계정으로 로그인할까요?</string>
+    <string name="summary_switch_confirm">로그아웃</string>
     <string name="summary_login_title">로그인이 필요해요</string>
-    <string name="summary_login_message">Talk 의 %1$s(%2$s) 계정 파일을 요약하려면 이 계정으로 로그인해 주세요.</string>
-    <string name="summary_login_message_logged_out">지금 계정에서 로그아웃했어요. Talk 의 %1$s(%2$s) 계정 파일을 요약하려면 이 계정으로 로그인해 주세요.</string>
+    <string name="summary_login_message">Talk 의 %1$s 계정 파일을 요약하려면 이 계정으로 로그인해 주세요.</string>
     <string name="toast_summary_cancelled">요약을 요청한 계정이 아니라서 문서 요약을 취소했어요.</string>
     <string name="toast_summary_unsupported">요약할 수 없는 파일 형식이에요.</string>
     <string name="toast_summary_no_text">문서에서 글자를 찾지 못했어요. 스캔한 문서는 요약할 수 없어요.</string>

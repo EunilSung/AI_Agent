@@ -23,9 +23,19 @@ data class ChatMessageDto(
      * 글("…에게 보냈습니다")로 넣으면 LLM 이 다음 요청에서 도구를 부르지 않고 그 글만 흉내 내 아무것도 보내지 않는다.
      */
     val sendAction: SendActionDto? = null,
+    /**
+     * Talk 파일 요약에서 나온 메시지면 true — 앱이 만든 요약 질문("<파일 이름> 요약해 줘", 파일 이름은 올린 사람이 정한다)과
+     * 그 요약 답변이다. RAG 서버는 이 메시지를 지시가 아닌 데이터로 감싸 LLM 에 넣는다. 파일에 숨긴 지시가 요약에 섞여
+     * 나와도 다음 질문에서 메시지 보내기 같은 동작을 끌어내지 못하게 한다. 사용자가 직접 쓴 질문과 보통 답변은 false 다.
+     */
+    val summary: Boolean = false,
 )
 
-/** 대화 기록 속 메시지 보내기 — 누구에게 무엇을, 그리고 사용자가 확인해 실제로 보냈는지. */
+/**
+ * 대화 기록 속 메시지 보내기 — 누구에게 무엇을, 그리고 사용자가 확인해 실제로 보냈는지.
+ * 브릿지는 [recipient] 를 [MAX_SEND_RECIPIENT_LENGTH] 자, [content] 를 [MAX_SEND_CONTENT_LENGTH] 자(UTF-16 단위, Kotlin
+ * `String.length`)로 잘라 RAG 서버에 넘긴다 — 예전 앱이 자르지 않고 저장한 긴 카드가 남은 대화도 거절하지 않는다.
+ */
 @Serializable
 data class SendActionDto(
     val recipient: String,
@@ -33,6 +43,12 @@ data class SendActionDto(
     /** 사용자가 [보내기]를 눌러 Talk 에 들어갔으면 true. 취소했거나 아직 확인하지 않았으면 false. */
     val sent: Boolean,
 )
+
+/** 메시지 보내기의 받는 사람(이름·아이디) 길이 끝. */
+const val MAX_SEND_RECIPIENT_LENGTH = 100
+
+/** 메시지 보내기 내용의 길이 끝. Talk 대화 하나의 최대 길이와 같다. */
+const val MAX_SEND_CONTENT_LENGTH = 6_000
 
 object ChatRole {
     const val USER = "user"

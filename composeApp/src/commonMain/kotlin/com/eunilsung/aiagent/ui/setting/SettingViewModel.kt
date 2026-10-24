@@ -47,7 +47,10 @@ class SettingViewModel(
     }
 
     private fun saveServer(url: String) {
-        useCases.setServerUrl(url)
+        if (!useCases.setServerUrl(url)) {
+            viewModelScope.launch { _events.send(SettingEvent.ServerInvalid) }
+            return
+        }
         serverInput.value = useCases.observeServerUrl().value
         viewModelScope.launch { _events.send(SettingEvent.ServerSaved) }
         refreshStatus()

@@ -1,6 +1,11 @@
 package com.eunilsung.aiagent.ui.chat
 
 import aiagent.composeapp.generated.resources.Res
+import aiagent.composeapp.generated.resources.refusal_access_key_not_sent
+import aiagent.composeapp.generated.resources.refusal_busy
+import aiagent.composeapp.generated.resources.refusal_client_key_invalid
+import aiagent.composeapp.generated.resources.refusal_payload_too_large
+import aiagent.composeapp.generated.resources.refusal_user_not_allowed
 import aiagent.composeapp.generated.resources.toast_chat_rate_limited
 import aiagent.composeapp.generated.resources.toast_chat_server
 import aiagent.composeapp.generated.resources.toast_chat_unreachable
@@ -13,6 +18,8 @@ import aiagent.composeapp.generated.resources.toast_summary_too_large
 import aiagent.composeapp.generated.resources.toast_summary_unsupported
 import com.eunilsung.aiagent.data.mapper.ChatMapper
 import com.eunilsung.aiagent.domain.model.AnswerFailure
+import com.eunilsung.aiagent.domain.model.BridgeRefusal
+import com.eunilsung.aiagent.ui.util.text
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -51,6 +58,22 @@ class FailureToastTest {
         for ((failure, expected) in cases) {
             assertEquals(expected, failure.toastText(), failure.toString())
         }
+    }
+
+    @Test
+    fun `브릿지 공통 거절은 이유마다 정해진 문구를 쓰고 보내기 실패도 같은 문구다`() {
+        val cases = mapOf(
+            BridgeRefusal.ClientKeyInvalid to Res.string.refusal_client_key_invalid,
+            BridgeRefusal.AccessKeyNotSent to Res.string.refusal_access_key_not_sent,
+            BridgeRefusal.UserNotAllowed to Res.string.refusal_user_not_allowed,
+            BridgeRefusal.PayloadTooLarge to Res.string.refusal_payload_too_large,
+            BridgeRefusal.Busy to Res.string.refusal_busy,
+        )
+        for ((refusal, expected) in cases) {
+            assertEquals(expected, AnswerFailure.Refused(refusal).toastText(), refusal.name)
+            assertEquals(expected, refusal.text(), refusal.name)
+        }
+        assertEquals(BridgeRefusal.entries.size, cases.size, "문구가 없는 거절 이유가 있다")
     }
 
     @Test

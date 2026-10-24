@@ -11,4 +11,6 @@ sealed interface SettingActions {
 
 sealed interface SettingEvent {
     data object ServerSaved : SettingEvent
+    /** https 도 에뮬레이터·시뮬레이터 주소도 아니라 저장하지 않았다. */
+    data object ServerInvalid : SettingEvent
 }

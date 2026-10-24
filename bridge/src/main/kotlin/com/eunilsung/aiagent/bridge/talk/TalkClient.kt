@@ -31,6 +31,12 @@ import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 
 /**
+ * Talk 서버가 시작할 때 만드는 AI 참여자 계정의 아이디(Talk 의 `AiAssistant.USER_ID`). 이 계정과의 1:1 방에서는 말할
+ * 때마다 Talk 서버가 외부 AI 를 부르므로 브릿지는 이 계정에게 보내지 않는다.
+ */
+const val TALK_AI_USER_ID = "ai"
+
+/**
  * Talk 서버를 부른다. 계정과 토큰은 Talk 서버가 정본이라, 브릿지는 로그인을 넘기고 토큰이 살아 있는지 묻기만 한다.
  */
 class TalkClient(

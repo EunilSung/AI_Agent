@@ -22,10 +22,15 @@
 			</array>
 		</dict>
 	</array>
-	<!-- 개발 중에는 이 Mac 의 브릿지(http://localhost:8095)에 붙는다. 터널로 바깥에 열 때는 https 주소를 쓴다. -->
+	<!--
+		ATS 를 통째로 끄지 않고 로컬 평문만 연다 — 시뮬레이터는 이 Mac 의 브릿지(http://localhost:8095)에 붙는다.
+		NSAllowsLocalNetworking 은 localhost 말고도 .local 이름·점 없는 이름(IP 주소도 그렇다고 알려져 있다)의 평문을 연다.
+		그래서 iOS 는 OS 가 아니라 앱의 주소 규칙(domain/util/BridgeAddress.kt)이 막는다 — 설정·로그인 화면 입력, 저장된 주소,
+		빌드 기본 주소(bridge.baseUrl)가 모두 그 규칙을 거친다. 실기기·터널은 https 주소를 쓴다.
+	-->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>

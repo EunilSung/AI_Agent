@@ -14,11 +14,14 @@ import aiagent.composeapp.generated.resources.setting_status_checking
 import aiagent.composeapp.generated.resources.setting_status_chunks
 import aiagent.composeapp.generated.resources.setting_status_docs
 import aiagent.composeapp.generated.resources.setting_status_down
+import aiagent.composeapp.generated.resources.setting_status_key_invalid
+import aiagent.composeapp.generated.resources.setting_status_key_not_sent
 import aiagent.composeapp.generated.resources.setting_status_model
 import aiagent.composeapp.generated.resources.setting_status_ok
 import aiagent.composeapp.generated.resources.setting_status_refresh
 import aiagent.composeapp.generated.resources.setting_status_talk
 import aiagent.composeapp.generated.resources.setting_title
+import aiagent.composeapp.generated.resources.toast_setting_server_invalid
 import aiagent.composeapp.generated.resources.toast_setting_server_saved
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cafe.adriel.voyager.core.screen.Screen
+import com.eunilsung.aiagent.domain.model.BridgeRefusal
 import com.eunilsung.aiagent.ui.theme.AppColors
 import com.eunilsung.aiagent.ui.uikit.TestTags
 import com.eunilsung.aiagent.ui.uikit.button.ButtonV1
@@ -69,6 +73,7 @@ object SettingScreen : Screen {
             viewModel.events.collect { event ->
                 when (event) {
                     SettingEvent.ServerSaved -> toast.show(getString(Res.string.toast_setting_server_saved))
+                    SettingEvent.ServerInvalid -> toast.show(getString(Res.string.toast_setting_server_invalid))
                 }
             }
         }
@@ -134,9 +139,17 @@ fun SettingContent(
                 val checking = stringResource(Res.string.setting_status_checking)
                 val ok = stringResource(Res.string.setting_status_ok)
                 val down = stringResource(Res.string.setting_status_down)
+                val keyInvalid = stringResource(Res.string.setting_status_key_invalid)
+                val keyNotSent = stringResource(Res.string.setting_status_key_not_sent)
                 StatusRow(
                     label = stringResource(Res.string.setting_status_bridge),
-                    value = when { status == null -> checking; status.bridge -> ok; else -> down },
+                    value = when {
+                        status == null -> checking
+                        status.bridge -> ok
+                        status.refusal == BridgeRefusal.ClientKeyInvalid -> keyInvalid
+                        status.refusal == BridgeRefusal.AccessKeyNotSent -> keyNotSent
+                        else -> down
+                    },
                     isGood = status?.bridge,
                     modifier = Modifier.testTag(TestTags.SETTING_STATUS_BRIDGE),
                 )

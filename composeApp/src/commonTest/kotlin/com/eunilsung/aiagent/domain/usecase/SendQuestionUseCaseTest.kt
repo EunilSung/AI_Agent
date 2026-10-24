@@ -9,6 +9,7 @@ import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.MessageStatus
 import com.eunilsung.aiagent.domain.model.Person
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.SendStatus
 import com.eunilsung.aiagent.domain.model.Source
 import com.eunilsung.aiagent.domain.model.User
@@ -28,7 +29,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -52,10 +53,10 @@ class SendQuestionUseCaseTest {
     private class FakeMessenger(var failSend: Boolean = false) : MessengerRepository {
         val sent = mutableListOf<Triple<String, String, String>>()
         override suspend fun findPeople(query: String): List<Person> = PEOPLE.filter { query in it.name || query == it.id }
-        override suspend fun send(person: Person, content: String, requestId: String): Boolean {
-            if (failSend) return false
+        override suspend fun send(person: Person, content: String, requestId: String): SendResult {
+            if (failSend) return SendResult.Failed()
             sent += Triple(person.id, content, requestId)
-            return true
+            return SendResult.Sent
         }
     }
 
@@ -209,7 +210,7 @@ class SendQuestionUseCaseTest {
         val card = conversations.messages(id).last()
         assertEquals(2, card.sendRequest!!.candidates.size)
 
-        assertTrue(ConfirmSendUseCase(conversations, messenger)(id, card.id, "test4"))
+        assertEquals(SendResult.Sent, ConfirmSendUseCase(conversations, messenger)(id, card.id, "test4"))
 
         assertEquals(listOf(Triple("test4", "내일 회의는 10시입니다.", card.id)), messenger.sent)
         val result = conversations.messages(id).last().sendRequest!!
@@ -226,11 +227,11 @@ class SendQuestionUseCaseTest {
         SendQuestionUseCase(conversations, assistant, messenger)(id, "test2 에게 인사해줘")
         val cardId = conversations.messages(id).last().id
 
-        assertFalse(ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
+        assertIs<SendResult.Failed>(ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
         assertEquals(SendStatus.Failed, conversations.messages(id).last().sendRequest!!.status)
 
         messenger.failSend = false
-        assertTrue(ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
+        assertEquals(SendResult.Sent, ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
         assertEquals(SendStatus.Sent, conversations.messages(id).last().sendRequest!!.status)
     }
 
@@ -245,7 +246,7 @@ class SendQuestionUseCaseTest {
 
         CancelSendUseCase(conversations)(id, cardId)
 
-        assertFalse(ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
+        assertIs<SendResult.Failed>(ConfirmSendUseCase(conversations, messenger)(id, cardId, "test2"))
         assertEquals(SendStatus.Cancelled, conversations.messages(id).last().sendRequest!!.status)
         assertTrue(messenger.sent.isEmpty())
     }

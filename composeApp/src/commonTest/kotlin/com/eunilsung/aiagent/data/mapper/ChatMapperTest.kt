@@ -45,6 +45,15 @@ class ChatMapperTest {
     }
 
     @Test
+    fun `파일 요약의 질문과 답변은 요약으로 표시해 넘긴다`() {
+        val asked = ChatMessage("q", "c", ChatRole.User, "보고서.pdf 요약해 줘", createdAt = 1, summary = true)
+        val summary = ChatMessage("a", "c", ChatRole.Assistant, "한 줄 요약", createdAt = 2, summary = true)
+
+        assertEquals(ChatMessageDto(role = "user", content = "보고서.pdf 요약해 줘", summary = true), mapper.toDto(asked))
+        assertEquals(ChatMessageDto(role = "assistant", content = "한 줄 요약", summary = true), mapper.toDto(summary))
+    }
+
+    @Test
     fun `스트림 오류는 code 로만 가리고 message 는 이유를 바꾸지 않는다`() {
         val internal = "Server error '500 Internal Server Error' for url 'http://localhost:11434/v1/chat/completions'"
         assertEquals(AnswerFailure.Server(internal), mapper.streamFailure("""{"message":"$internal","code":""}"""))

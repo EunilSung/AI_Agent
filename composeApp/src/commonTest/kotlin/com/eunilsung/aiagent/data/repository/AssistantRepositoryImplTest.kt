@@ -10,6 +10,7 @@ import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.Source
 import com.eunilsung.aiagent.domain.model.User
+import com.eunilsung.aiagent.shared.api.ChatRequest
 import com.eunilsung.aiagent.shared.api.SummarizeRequest
 import com.russhwolf.settings.MapSettings
 import io.ktor.client.HttpClient
@@ -255,6 +256,37 @@ class AssistantRepositoryImplTest {
         val (repository, requests) = repository(loggedIn = false)
         assertFailsWith<AnswerFailure.SessionExpired> { repository.summarize("f", "a.pdf").toList() }
         assertTrue(requests.isEmpty())
+    }
+
+    /**
+     * 긴 답변·요약이 쌓인 대화도 후속 질문이 막히지 않는다 — 브릿지가 받는 상한(메시지 50개·본문 512KB) 안의 최근 기록만 보낸다.
+     * 기록을 통째로 보내면 413 payload_too_large 로 그 대화의 후속 질문이 모두 막힌다.
+     */
+    @Test
+    fun `긴 대화도 브릿지 상한 안의 최근 기록과 이번 질문만 보낸다`() = runTest {
+        val (repository, requests) = repository()
+        val long = "가".repeat(8_000)
+        val history = (0 until 60).map { index ->
+            ChatMessage(
+                id = "m$index",
+                conversationId = "c",
+                role = if (index % 2 == 0) ChatRole.User else ChatRole.Assistant,
+                content = long,
+                createdAt = index.toLong(),
+                summary = index < 2,
+            )
+        }
+        val followUp = ChatMessage("q", "c", ChatRole.User, "이어서 알려 줘", createdAt = 100)
+
+        repository.ask(history + followUp).toList()
+
+        val body = requests[1]
+        val sent = Json.decodeFromString(ChatRequest.serializer(), body).messages
+        assertTrue(body.encodeToByteArray().size <= 512 * 1024, "본문이 ${body.encodeToByteArray().size} 바이트다")
+        assertTrue(sent.size <= 50)
+        assertEquals("이어서 알려 줘", sent.last().content)
+        assertTrue(sent.size >= 10, "RAG 가 쓰는 최근 10개보다 적게 보냈다")
+        assertTrue(sent.dropLast(1).all { it.content == long })
     }
 
     private companion object {
