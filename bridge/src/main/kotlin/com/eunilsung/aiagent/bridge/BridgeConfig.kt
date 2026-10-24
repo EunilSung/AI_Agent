@@ -9,6 +9,7 @@ package com.eunilsung.aiagent.bridge
  * @property peoplePerUserHourly 한 사람이 한 시간에 할 수 있는 사람 찾기 수. 부를 때마다 Talk 의 전체 사용자 목록을 받는다.
  * @property accessKey 앱이 [com.eunilsung.aiagent.shared.api.BRIDGE_KEY_HEADER] 에 실어야 하는 접속 키. 없으면 [allowNoKey] 일 때만 뜨고,
  * [MIN_ACCESS_KEY_LENGTH] 자보다 짧으면 뜨지 않는다 — Funnel 너머에서 키를 마음껏 대입해 볼 수 있으므로 키가 바깥의 유일한 문이다.
+ * 공백 없는 ASCII 글자(영문·숫자·기호)로 [MAX_ACCESS_KEY_LENGTH] 자까지만 받는다 — 앱의 로그인 화면이 그런 키만 넣을 수 있다.
  * @property allowNoKey 접속 키 없이 띄운다. 이 기기 안에서만 시험할 때 쓴다(`BRIDGE_ALLOW_NO_KEY=1`). Tailscale Funnel 이 켜져 있으면
  * 기본 주소(`127.0.0.1`)로 띄워도 인터넷의 요청이 들어오므로, 이때는 이 기기 안에서 프록시 없이 바로 온 요청만 받는다
  * ([com.eunilsung.aiagent.bridge.auth.requireAccessKey]).
@@ -37,11 +38,15 @@ data class BridgeConfig(
     val llmWaitMillis: Long = 2_000,
     val requestReadTimeoutMillis: Long = 30_000,
 ) {
-    /** 이 설정으로 띄워도 되는지. 접속 키가 없으면 [allowNoKey] 일 때만 되고, 키가 [MIN_ACCESS_KEY_LENGTH] 자보다 짧으면 안 된다. */
+    /**
+     * 이 설정으로 띄워도 되는지. 접속 키가 없으면 [allowNoKey] 일 때만 되고, 키가 [MIN_ACCESS_KEY_LENGTH] 자보다 짧거나
+     * 앱이 넣을 수 없는 키(공백·한글 같은 글자, [MAX_ACCESS_KEY_LENGTH] 자보다 김)면 안 된다.
+     */
     val startup: Startup
         get() = when {
             accessKey == null -> if (allowNoKey) Startup.WithoutKey else Startup.MissingKey
             accessKey.length < MIN_ACCESS_KEY_LENGTH -> Startup.WeakKey
+            accessKey.length > MAX_ACCESS_KEY_LENGTH || accessKey.any { it.code !in KEY_CHARS } -> Startup.InvalidKey
             else -> Startup.Ready
         }
 
@@ -62,6 +67,8 @@ data class BridgeConfig(
         data object MissingKey : Startup
         /** 접속 키가 [MIN_ACCESS_KEY_LENGTH] 자보다 짧아 뜨지 않는다. */
         data object WeakKey : Startup
+        /** 접속 키에 공백·한글 같은 글자가 있거나 [MAX_ACCESS_KEY_LENGTH] 자보다 길어 뜨지 않는다. 앱이 그런 키를 넣을 수 없다. */
+        data object InvalidKey : Startup
     }
 
     companion object {
@@ -69,6 +76,12 @@ data class BridgeConfig(
 
         /** 접속 키 길이의 끝(아래). `openssl rand -base64 32` 가 만드는 44자 키면 넉넉하다. */
         const val MIN_ACCESS_KEY_LENGTH = 32
+
+        /** 접속 키 길이의 끝(위). 앱의 로그인 화면(`SetAccessKeyUseCase`)이 받는 길이와 같다. */
+        const val MAX_ACCESS_KEY_LENGTH = 256
+
+        /** 접속 키에 쓸 수 있는 글자 — 공백 없는 ASCII(`!`~`~`). 키는 HTTP 헤더로 오가고, 앱도 이 글자만 받는다. */
+        private val KEY_CHARS = 0x21..0x7E
 
         fun fromEnv(env: Map<String, String> = System.getenv()): BridgeConfig = BridgeConfig(
             host = env["HOST"]?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_HOST,

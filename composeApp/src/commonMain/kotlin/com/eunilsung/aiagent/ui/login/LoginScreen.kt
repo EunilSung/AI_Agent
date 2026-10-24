@@ -10,7 +10,16 @@ import aiagent.composeapp.generated.resources.login_fail_locked
 import aiagent.composeapp.generated.resources.login_fail_unreachable
 import aiagent.composeapp.generated.resources.login_hide_password
 import aiagent.composeapp.generated.resources.login_hint
+import aiagent.composeapp.generated.resources.login_keep_access_key
+import aiagent.composeapp.generated.resources.login_access_key
+import aiagent.composeapp.generated.resources.login_access_key_invalid
+import aiagent.composeapp.generated.resources.login_change_access_key
+import aiagent.composeapp.generated.resources.login_fail_access_key
+import aiagent.composeapp.generated.resources.login_hide_access_key
+import aiagent.composeapp.generated.resources.login_server_address
 import aiagent.composeapp.generated.resources.login_server_label
+import aiagent.composeapp.generated.resources.login_server_required
+import aiagent.composeapp.generated.resources.login_show_access_key
 import aiagent.composeapp.generated.resources.login_show_password
 import aiagent.composeapp.generated.resources.login_tagline
 import aiagent.composeapp.generated.resources.logo
@@ -111,7 +120,7 @@ fun LoginContent(
                         LoginResult.InvalidCredentials -> Res.string.login_fail_invalid
                         LoginResult.Locked -> Res.string.login_fail_locked
                         LoginResult.Unreachable -> Res.string.login_fail_unreachable
-                        is LoginResult.Refused -> reason.refusal.text()
+                        is LoginResult.Refused -> if (reason.isAccessKeyRefusal) Res.string.login_fail_access_key else reason.refusal.text()
                         else -> Res.string.login_fail
                     }
                 ),
@@ -197,6 +206,9 @@ private fun LoginInputForm(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (uiState.isServerRequired) {
+            RequiredServerField(uiState = uiState, onAction = onAction, onNext = { focusManager.moveFocus(FocusDirection.Down) })
+        }
         LoginField(
             value = uiState.id,
             onValueChange = { onAction(LoginActions.OnIdChange(it)) },
@@ -209,28 +221,55 @@ private fun LoginInputForm(
             value = uiState.pw,
             onValueChange = { onAction(LoginActions.OnPwChange(it)) },
             label = stringResource(Res.string.pw),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { if (uiState.canSubmit) submit() }),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = if (uiState.isAccessKeyFieldShown) ImeAction.Next else ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                onDone = { if (uiState.canSubmit) submit() },
+            ),
             testTag = TestTags.LOGIN_PW,
             onFocused = revealSubmit,
             visualTransformation = if (uiState.isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
-                Icon(
-                    painter = painterResource(
-                        if (uiState.isPasswordVisible) Res.drawable.visibility_off_icon else Res.drawable.visibility_icon
-                    ),
-                    contentDescription = stringResource(
-                        if (uiState.isPasswordVisible) Res.string.login_hide_password else Res.string.login_show_password
-                    ),
-                    tint = AppColors.TextSub,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable { onAction(LoginActions.OnTogglePasswordVisible) }
-                        .padding(9.dp),
+                VisibilityToggle(
+                    isVisible = uiState.isPasswordVisible,
+                    showLabel = stringResource(Res.string.login_show_password),
+                    hideLabel = stringResource(Res.string.login_hide_password),
+                    onClick = { onAction(LoginActions.OnTogglePasswordVisible) },
                 )
             },
         )
+        if (uiState.isAccessKeyFieldShown) {
+            LoginField(
+                value = uiState.accessKey,
+                onValueChange = { onAction(LoginActions.OnAccessKeyChange(it)) },
+                label = stringResource(Res.string.login_access_key),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (uiState.canSubmit) submit() }),
+                testTag = TestTags.LOGIN_ACCESS_KEY,
+                onFocused = revealSubmit,
+                visualTransformation = if (uiState.isAccessKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    VisibilityToggle(
+                        isVisible = uiState.isAccessKeyVisible,
+                        showLabel = stringResource(Res.string.login_show_access_key),
+                        hideLabel = stringResource(Res.string.login_hide_access_key),
+                        onClick = { onAction(LoginActions.OnToggleAccessKeyVisible) },
+                    )
+                },
+            )
+            if (uiState.isAccessKeyInvalid) {
+                Text(
+                    text = stringResource(Res.string.login_access_key_invalid),
+                    color = AppColors.Red,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
 
         /** 버튼 아래 안내까지 함께 올려야 키보드 위 자동완성 줄이 있어도 버튼이 다 보인다. */
         Column(
@@ -257,8 +296,56 @@ private fun LoginInputForm(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             )
 
-            ServerAddress(uiState = uiState, onAction = onAction)
+            if (!uiState.isServerRequired) {
+                ServerAddress(uiState = uiState, onAction = onAction)
+            }
+            if (uiState.canToggleAccessKeyEdit) {
+                Text(
+                    text = stringResource(
+                        if (uiState.isAccessKeyEditing) Res.string.login_keep_access_key else Res.string.login_change_access_key
+                    ),
+                    color = AppColors.TextHint,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .testTag(TestTags.LOGIN_CHANGE_ACCESS_KEY)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onAction(LoginActions.OnToggleAccessKeyEdit) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
+    }
+}
+
+/**
+ * 서버 주소를 아직 정하지 않았을 때(주소·접속 키 없이 만든 공개 릴리스를 처음 켰다) 맨 위에 여는 서버 주소 칸.
+ * 따로 저장하지 않고 로그인을 누르면 저장한다.
+ */
+@Composable
+private fun RequiredServerField(uiState: LoginUiState, onAction: (LoginActions) -> Unit, onNext: () -> Unit) {
+    Text(
+        text = stringResource(Res.string.login_server_required),
+        color = AppColors.TextSub,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+        textAlign = TextAlign.Center,
+    )
+    LoginField(
+        value = uiState.serverInput.orEmpty(),
+        onValueChange = { onAction(LoginActions.OnServerInputChange(it)) },
+        label = stringResource(Res.string.login_server_address),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+        keyboardActions = KeyboardActions(onNext = { onNext() }),
+        testTag = TestTags.LOGIN_SERVER,
+    )
+    if (uiState.isServerInvalid) {
+        Text(
+            text = stringResource(Res.string.server_url_invalid),
+            color = AppColors.Red,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -301,6 +388,21 @@ private fun ServerAddress(uiState: LoginUiState, onAction: (LoginActions) -> Uni
     }
 }
 
+/** 입력칸의 글자를 보이거나 가리는 눈 아이콘. */
+@Composable
+private fun VisibilityToggle(isVisible: Boolean, showLabel: String, hideLabel: String, onClick: () -> Unit) {
+    Icon(
+        painter = painterResource(if (isVisible) Res.drawable.visibility_off_icon else Res.drawable.visibility_icon),
+        contentDescription = if (isVisible) hideLabel else showLabel,
+        tint = AppColors.TextSub,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(9.dp),
+    )
+}
+
 /** 떠 있는 라벨이 붙은 테두리 입력칸. */
 @Composable
 private fun LoginField(
@@ -340,7 +442,7 @@ private fun LoginField(
     )
 }
 
-/** 로그인 버튼 — 아이디·비밀번호를 다 넣어야 눌린다. */
+/** 로그인 버튼 — 아이디·비밀번호(서버 주소 칸·접속 키 칸이 열렸으면 그것도)를 다 넣어야 눌린다. */
 @Composable
 private fun LoginButton(enabled: Boolean, isLoading: Boolean, onClick: () -> Unit) {
     Box(

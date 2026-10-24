@@ -31,15 +31,20 @@ Talk 의 규칙을 그대로 따른다. 다른 점만 덧붙였다.
    앱이 확인 카드에서 [보내기]를 받은 뒤에 브릿지를 부른다. 확인 없이 보내는 경로를 만들지 않는다.
 7. **바깥에 여는 것은 브릿지 하나이고, 그것도 터널을 거쳐서만 연다.** RAG 서버·Ollama·브릿지(기본 HOST)·Talk 로컬 서버는 모두
    `127.0.0.1` 에서만 받는다(Funnel 은 127.0.0.1:8095 로 붙는다). 브릿지의 모든 경로(`/v1/health` 포함)는 먼저 접속 키
-   `X-Bridge-Key`(`local.properties` 의 `bridge.accessKey`, 32자 이상)를 확인하고, `/v1/health` 밖은 Talk 토큰으로 사용자도 확인한다.
+   `X-Bridge-Key`(`local.properties` 의 `bridge.accessKey`, 공백 없는 영문·숫자·기호 32~256자)를 확인하고, `/v1/health` 밖은 Talk 토큰으로 사용자도 확인한다.
    거절은 `routes/ErrorResponses.kt` 의 `respondError` 로 보낸다 — `call.respond(상태, ApiError)` 는 SSE 요청에서 406 이 된다.
    새 경로는 `receiveJsonOrReject` 로 본문 상한을 걸고, LLM 을 부르면 동시 실행 상한(`limit/ConcurrencyLimiter`)을 거친다.
 8. **실제 주소·계정·기기 식별자·서명 팀은 저장소에 적지 않는다.** 이 저장소는 GitHub 공개 저장소다. 실제 값은 저장소 밖
    `../AI_Agent_info/` 에 모아 두고, 저장소의 코드·문서·커밋 메시지에는 `<기기 이름>.<tailnet 이름>.ts.net` 같은 자리표시만 쓴다.
    다만 주소를 숨기는 것은 보안 수단이 아니다 — ts.net 이름은 인증서 투명성 로그로 누구나 찾는다. 막는 것은 접속 키와 계정이다.
    테스트 계정 비밀번호(1234)는 공개돼 있으니 바깥에 열 때는 접속 키를 반드시 켜 둔다(키 없이 뜨지 않는다).
-9. **접속 키가 든 앱은 공개하지 않는다.** 키는 앱 바이너리에 상수로 들어간다. GitHub Actions(`.github/workflows`)에는 `AI_AGENT_BRIDGE_KEY`·
-   `AI_AGENT_BRIDGE_URL` 을 비밀값·변수로 넣지 않고(CI 가 생성 파일의 키가 비었는지 확인한다), 릴리스에는 브릿지 실행본·RAG 서버 소스만 올린다.
+9. **공개하는 앱에는 접속 키를 넣지 않는다.** 공개 릴리스 앱은 키도 주소도 없이 빌드하고, 쓰는 사람이 로그인 화면에서 서버 주소와 받은 키를
+   넣는다(`data/local/LocalStores.kt` 의 `AccessKeyStore` — 넣을 때의 서버 출처(스킴·호스트·포트)에 묶어 잠가 저장하고 그 출처로만 싣는다).
+   그런 빌드는 서버 주소를 넣기 전에는 아무것도 보내지 않는다(빌드 기본 주소는 에뮬레이터용 평문 주소다). HTTP 클라이언트는 리다이렉트를
+   따라가지 않는다. `local.properties` 의 키는 개발용 빌드의 기본 키일 뿐이고, 그런 빌드는 바깥 사람에게 주지 않는다.
+   GitHub Actions(`.github/workflows`)에는 `AI_AGENT_BRIDGE_KEY`·`AI_AGENT_BRIDGE_URL` 을 비밀값·변수로 넣지 않는다 — CI 와 릴리스가 생성 파일의
+   키·주소가 비었는지 확인한다. 릴리스 APK 는 `release` 환경(태그 `v*` 만 허용)의 키로 서명하고, 키가 없으면 릴리스가 멈춘다. 태그 규칙만으로는 쓰기 권한자를
+   막지 못하므로 `v*` 태그는 저장소 Ruleset 으로 관리자만 만들게 둔다.
 
 ## 구조
 
@@ -63,7 +68,7 @@ iosApp/     Xcode 프로젝트 (빌드 단계에서 Gradle 이 ComposeApp 프레
   고칠 때는 Talk 쪽 원본과 어긋나지 않게 한다.
 - 대화 기록은 기기 DB 에 로그인한 사람별로 남는다. 스키마를 바꾸면 `Config.Database.NAME` 의 숫자를 올리고, 앞 이름을
   `Config.Database.OBSOLETE_NAMES` 에 더한다(앱이 예전 파일을 지운다). 이름이 바뀌면 기기의 대화 기록은 새로 시작한다.
-- 토큰·사용자 정보는 Talk 와 같은 방식으로 Keystore(Android)·Keychain(iOS) 키로 잠가 저장한다(`data/local/LocalSecret*`).
+- 토큰·사용자 정보·접속 키는 Talk 와 같은 방식으로 Keystore(Android)·Keychain(iOS) 키로 잠가 저장한다(`data/local/LocalSecret*`).
 - 앱의 평문 HTTP 는 로컬 주소(10.0.2.2·localhost·127.0.0.1)에만 열려 있다(Android `network_security_config`, iOS
   `NSAllowsLocalNetworking`, 그리고 앱의 주소 규칙 `BridgeAddress` — 입력·저장·빌드 기본 주소 모두 거친다). 실기기는 https 터널 주소를 쓴다.
 - 링크는 플랫폼 진입점(Android `MainActivity` 의 intent-filter·`onNewIntent`, iOS `iOSApp.swift` 의 `onOpenURL`)이

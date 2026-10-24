@@ -2,6 +2,7 @@ package com.eunilsung.aiagent
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.DarwinClientEngineConfig
+import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.pluginOrNull
 import org.koin.dsl.koinApplication
@@ -34,6 +35,18 @@ class PlatformHttpClientTest {
         config.sessionConfig(session)
         assertTrue(session.timeoutIntervalForRequest >= FIRST_TOKEN_WAIT_SECONDS, "timeoutIntervalForRequest=${session.timeoutIntervalForRequest}")
         assertTrue(session.timeoutIntervalForResource >= ONE_HOUR_SECONDS, "timeoutIntervalForResource=${session.timeoutIntervalForResource}")
+
+        http.close()
+        koin.close()
+    }
+
+    /** 리다이렉트를 따라가면 Ktor 가 접속 키 헤더를 다른 호스트로 옮겨 싣는다. 브릿지는 리다이렉트를 쓰지 않는다. */
+    @Test
+    fun `리다이렉트를 따라가지 않는다`() {
+        val koin = koinApplication { modules(platformModule) }.koin
+        val http = koin.get<HttpClient>()
+
+        assertNull(http.pluginOrNull(HttpRedirect), "리다이렉트를 따라가면 접속 키가 다른 호스트로 간다")
 
         http.close()
         koin.close()

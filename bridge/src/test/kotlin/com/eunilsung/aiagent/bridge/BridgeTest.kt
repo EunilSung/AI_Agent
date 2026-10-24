@@ -813,7 +813,24 @@ b.pdf"}""",
                 startApplication()
             }
         }
-        assertTrue(generateSequence(error) { it.cause }.any { "at least" in it.message.orEmpty() }, error.toString())
+        assertTrue(generateSequence(error) { it.cause }.any { "printable ASCII" in it.message.orEmpty() }, error.toString())
+    }
+
+    @Test
+    fun `앱이 넣을 수 없는 접속 키로는 브릿지가 뜨지 않는다`() {
+        val error = assertFails {
+            testApplication {
+                application {
+                    module(
+                        BridgeConfig(accessKey = "has space in the middle of the key 0123"),
+                        RagClient(HttpClient(MockEngine(ragHandler)), "http://rag"),
+                        TalkClient(HttpClient(MockEngine(talkHandler)), "http://talk"),
+                    )
+                }
+                startApplication()
+            }
+        }
+        assertTrue(generateSequence(error) { it.cause }.any { "without spaces" in it.message.orEmpty() }, error.toString())
     }
 
     @Test

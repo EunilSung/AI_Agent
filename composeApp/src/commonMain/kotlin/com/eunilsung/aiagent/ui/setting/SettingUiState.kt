@@ -12,7 +12,13 @@ data class SettingUiState(
     val serverInput: String = "",
     /** 확인 중이면 null. */
     val status: ServiceStatus? = null,
+    /** 빌드 기본 주소. 그대로 쓰면 안 되는 빌드(공개 릴리스)면 null 이고 [기본값] 을 숨긴다. */
+    val defaultUrl: String? = null,
 ) {
     val canSaveServer: Boolean
         get() = serverInput.isNotBlank() && serverInput.trim().trimEnd('/') != serverUrl
+
+    /** [기본값] 을 보일지 — 기본 주소를 써도 되는 빌드이고 지금 주소가 기본 주소가 아닐 때. */
+    val canResetServer: Boolean
+        get() = defaultUrl != null && defaultUrl != serverUrl
 }

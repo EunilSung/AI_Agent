@@ -117,5 +117,23 @@ interface ServerSettingsRepository {
      */
     fun setBaseUrl(url: String)
 
+    /**
+     * 빌드 기본 주소. 그대로 쓰면 안 되는 빌드(주소·접속 키 없이 만든 공개 릴리스 — 기본 주소가 에뮬레이터·시뮬레이터용 평문 주소다)면
+     * null 이다. 그런 빌드는 기본값으로 되돌리지 않는다.
+     */
+    fun defaultBaseUrl(): String?
+
+    /** 서버 주소를 정했는지 — 쓰는 사람이 저장했거나, 빌드 기본 주소를 그대로 써도 되는 빌드다. */
+    fun isServerChosen(): Boolean
+
+    /** 지금 서버 주소로 보낼 접속 키가 있는지. */
+    fun hasAccessKey(): Boolean
+
+    /**
+     * 사용자가 받은 접속 키를 지금 서버 주소의 출처(`스킴://호스트:포트`)에 묶어 저장한다. 그 출처로만 싣는다.
+     * 서버 주소를 정하기 전([isServerChosen] 이 false)에는 저장하지 않는다.
+     */
+    fun setAccessKey(key: String)
+
     suspend fun status(): ServiceStatus
 }

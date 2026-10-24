@@ -1,5 +1,6 @@
 package com.eunilsung.aiagent.data.repository
 
+import com.eunilsung.aiagent.data.local.AccessKeyStore
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
 import com.eunilsung.aiagent.data.local.SessionStore
 import com.eunilsung.aiagent.data.mapper.ChatMapper
@@ -42,7 +43,7 @@ class AssistantRepositoryImplTest {
         }
         val settings = MapSettings()
         val session = SessionStore(settings).apply { if (loggedIn) save("token-1", User("test1", "김민준")) }
-        val bridge = BridgeClient(HttpClient(engine), BridgeUrlStore(settings))
+        val bridge = BridgeClient(HttpClient(engine), BridgeUrlStore(settings), AccessKeyStore(settings, buildKey = "", buildKeyHosts = emptySet()))
         return AssistantRepositoryImpl(bridge, session, ChatMapper()) to requests
     }
 

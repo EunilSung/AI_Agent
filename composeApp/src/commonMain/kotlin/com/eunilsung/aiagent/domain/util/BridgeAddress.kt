@@ -49,6 +49,23 @@ object BridgeAddress {
     }
 
     /**
+     * [url] 이 규칙에 맞으면 그 출처 `스킴://호스트:포트`(소문자, 포트를 적지 않았으면 스킴의 기본 포트), 아니면 null.
+     *
+     * 사용자가 넣은 접속 키는 호스트가 아니라 출처에 묶는다 — 같은 호스트라도 다른 포트는 다른 서버(프로세스)일 수 있다.
+     */
+    fun originOf(url: String): String? {
+        val host = hostOf(url) ?: return null
+        val scheme = url.substringBefore("://").lowercase()
+        val port = url.substringAfter("://").substringBefore('/').substringAfter(':', "")
+        return origin(scheme, host, port.toIntOrNull() ?: defaultPort(scheme))
+    }
+
+    /** 출처 문자열 — [originOf] 와 같은 모양이다. 실제 요청 주소에서 출처를 만들 때 쓴다. */
+    fun origin(scheme: String, host: String, port: Int): String = "${scheme.lowercase()}://${host.lowercase()}:$port"
+
+    private fun defaultPort(scheme: String): Int = if (scheme == "https") 443 else 80
+
+    /**
      * 빌드 기본 주소. 빌드 때 넣은 [configured](`bridge.baseUrl`·`AI_AGENT_BRIDGE_URL`)가 규칙에 맞으면 그것을, 비었거나 맞지 않으면
      * [platformDefault](에뮬레이터·시뮬레이터에서 이 Mac 에 닿는 주소)를 쓴다.
      *

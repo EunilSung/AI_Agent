@@ -22,16 +22,25 @@ object Config {
         val DEFAULT_BASE_URL: String = BridgeAddress.buildDefault(BRIDGE_BASE_URL, platformDefaultBridgeUrl)
 
         /**
-         * 브릿지 접속 키 — 요청의 `X-Bridge-Key` 헤더에 싣는다. `local.properties` 의 `bridge.accessKey`
-         * (또는 환경변수 `AI_AGENT_BRIDGE_KEY`)에서 빌드할 때 들어온다. 저장소에는 값을 두지 않는다.
+         * 빌드 때 넣는 접속 키 — 키를 가진 사람이 직접 만드는 개발용 빌드에만 쓴다. `local.properties` 의 `bridge.accessKey`
+         * (또는 환경변수 `AI_AGENT_BRIDGE_KEY`)에서 들어온다. 저장소에는 값을 두지 않는다.
          *
-         * 모든 설치본이 같은 값을 쓰고, 앱 바이너리(APK·IPA)에 그대로 들어가 꺼낼 수 있다. 빌드를 바깥 사람에게 주지 않는다.
-         * 빌드가 새어 나갔으면 브릿지의 `BRIDGE_ACCESS_KEY` 와 이 값을 함께 바꾸고 다시 빌드한다.
+         * 이 값은 앱 바이너리(APK·IPA)에 그대로 들어가 꺼낼 수 있다. 그래서 공개 릴리스는 이 값을 비워 빌드하고, 쓰는 사람이
+         * 로그인 화면에서 키를 넣는다([com.eunilsung.aiagent.data.local.AccessKeyStore]). 키를 넣어 만든 빌드는 바깥 사람에게
+         * 주지 않는다. 새어 나갔으면 브릿지의 `BRIDGE_ACCESS_KEY` 를 바꾼다.
          */
         const val ACCESS_KEY: String = BRIDGE_ACCESS_KEY
 
         /** [ACCESS_KEY] 를 실어도 되는 호스트 — 빌드 기본 주소의 호스트와 로컬 주소뿐이다([BridgeAddress.accessKeyHosts]). */
         val ACCESS_KEY_HOSTS: Set<String> = BridgeAddress.accessKeyHosts(DEFAULT_BASE_URL)
+
+        /**
+         * [DEFAULT_BASE_URL] 을 그대로 써도 되는 빌드인지 — 빌드 때 주소나 접속 키를 넣은 개발용 빌드만 그렇다.
+         *
+         * 둘 다 비운 공개 릴리스는 기본 주소가 에뮬레이터·시뮬레이터용 평문 주소(플랫폼 기본값)다. 실기기에서 `10.0.2.2` 는 같은 망의
+         * 아무 기기에나 닿을 수 있어, 쓰는 사람이 서버 주소를 넣기 전에는 로그인하지 않고 설정에서 기본값으로 되돌리지도 않는다.
+         */
+        val IS_DEFAULT_URL_USABLE: Boolean = ACCESS_KEY.isNotEmpty() || DEFAULT_BASE_URL != platformDefaultBridgeUrl
     }
 
     /** 로컬 데이터베이스(SQLDelight). [NAME] 을 바꾸면 새 DB 로 시작한다. */

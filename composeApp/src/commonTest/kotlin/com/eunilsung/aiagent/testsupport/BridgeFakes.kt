@@ -1,5 +1,6 @@
 package com.eunilsung.aiagent.testsupport
 
+import com.eunilsung.aiagent.data.local.AccessKeyStore
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
 import com.eunilsung.aiagent.data.local.SessionStore
 import com.eunilsung.aiagent.data.mapper.ChatMapper
@@ -23,5 +24,5 @@ fun sseAssistant(body: String): AssistantRepository {
     val engine = MockEngine { respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/event-stream")) }
     val settings = MapSettings()
     val session = SessionStore(settings).apply { save("token-test1", User("test1", "김민준")) }
-    return AssistantRepositoryImpl(BridgeClient(HttpClient(engine), BridgeUrlStore(settings)), session, ChatMapper())
+    return AssistantRepositoryImpl(BridgeClient(HttpClient(engine), BridgeUrlStore(settings), AccessKeyStore(settings, buildKey = "", buildKeyHosts = emptySet())), session, ChatMapper())
 }

@@ -22,10 +22,15 @@ private fun bridgeOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .callTimeout(0, TimeUnit.MILLISECONDS)
     .build()
 
+/**
+ * 리다이렉트는 따라가지 않는다 — Ktor 는 다른 호스트로 갈 때 `Authorization` 만 떼고 접속 키 헤더는 그대로 옮겨 싣는다.
+ * 브릿지는 리다이렉트를 쓰지 않는다. OkHttp 자체의 리다이렉트도 Ktor 가 끈다.
+ */
 val platformModule = module {
     single { DatabaseDriverFactory(get()) }
     single {
         HttpClient(OkHttp) {
+            followRedirects = false
             engine { preconfigured = bridgeOkHttpClient() }
         }
     }
