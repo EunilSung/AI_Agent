@@ -27,9 +27,9 @@ object Config {
     /** AI 대화방 화면의 기능 옵션. */
     object Chat {
         /** 답변 아래에 근거 문서 칩을 보일지. */
-        const val IS_SOURCES_ENABLED: Boolean = true
+        const val IS_SOURCES_ENABLED: Boolean = false
 
         /** 후속 질문을 다시 쓴 검색어를 보일지. */
-        const val IS_SEARCH_QUERY_ENABLED: Boolean = true
+        const val IS_SEARCH_QUERY_ENABLED: Boolean = false
     }
 }
