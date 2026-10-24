@@ -1,7 +1,7 @@
 appId: com.eunilsung.aiagent
 name: Talk 로 메시지를 보낸다
 # 로그인 → 새 대화 → "이서연(test2)에게 … 보내줘" → 확인 카드 → [보내기] → 보낸 결과.
-# 정말 Talk 에 들어갔는지는 흐름 밖에서 test2 로 Talk 서버에 물어 확인한다(README 의 검증 절차).
+# 정말 Talk 에 들어갔는지는 흐름 밖에서 test2 로 Talk 서버에 물어 확인한다(README 의 "테스트" 절).
 ---
 - runFlow: ../common/login.yaml
 - tapOn:
