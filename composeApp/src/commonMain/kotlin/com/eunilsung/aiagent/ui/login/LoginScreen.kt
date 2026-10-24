@@ -15,6 +15,7 @@ import aiagent.composeapp.generated.resources.login_show_password
 import aiagent.composeapp.generated.resources.login_tagline
 import aiagent.composeapp.generated.resources.logo
 import aiagent.composeapp.generated.resources.pw
+import aiagent.composeapp.generated.resources.server_url_invalid
 import aiagent.composeapp.generated.resources.setting_server_save
 import aiagent.composeapp.generated.resources.visibility_icon
 import aiagent.composeapp.generated.resources.visibility_off_icon
@@ -78,6 +79,7 @@ import com.eunilsung.aiagent.ui.uikit.TestTags
 import com.eunilsung.aiagent.ui.uikit.button.ButtonV1
 import com.eunilsung.aiagent.ui.uikit.dialog.LocalDialogManager
 import com.eunilsung.aiagent.ui.uikit.textfield.TextFieldV1
+import com.eunilsung.aiagent.ui.util.text
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
@@ -105,10 +107,11 @@ fun LoginContent(
         if (status is LoginStatus.Error) {
             dialog.alert(
                 message = getString(
-                    when (status.reason) {
+                    when (val reason = status.reason) {
                         LoginResult.InvalidCredentials -> Res.string.login_fail_invalid
                         LoginResult.Locked -> Res.string.login_fail_locked
                         LoginResult.Unreachable -> Res.string.login_fail_unreachable
+                        is LoginResult.Refused -> reason.refusal.text()
                         else -> Res.string.login_fail
                     }
                 ),
@@ -285,6 +288,15 @@ private fun ServerAddress(uiState: LoginUiState, onAction: (LoginActions) -> Uni
                 onValueChange = { onAction(LoginActions.OnServerInputChange(it)) },
             )
             ButtonV1(text = stringResource(Res.string.setting_server_save), onClick = { onAction(LoginActions.OnServerSave) })
+        }
+        if (uiState.isServerInvalid) {
+            Text(
+                text = stringResource(Res.string.server_url_invalid),
+                color = AppColors.Red,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

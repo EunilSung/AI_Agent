@@ -28,10 +28,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TestTimeSource
 
 /**
- * Talk 요약 링크 처리 — 같은 계정·다른 계정·로그인 안 됨, 그리고 로그인 뒤 같은/다른 계정.
- * 로그인은 [FakeAuth], 대화 기록은 진짜 저장소(인메모리 DB)를 쓴다.
+ * Talk 요약 링크 처리 — 같은 계정·다른 계정(묻고 고른 대로)·로그인 안 됨, 그리고 로그인 뒤 같은/다른 계정.
+ * 로그인은 [FakeAuth], 대화 기록은 진짜 저장소(인메모리 DB)를 쓴다. 시간은 [clock] 으로 넘겨, 3초 안에 다시 온 링크를
+ * 버리는 규칙이 다른 시나리오를 막지 않게 한다.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SummaryLinkUseCaseTest {
@@ -42,9 +45,20 @@ class SummaryLinkUseCaseTest {
         val conversations: ConversationRepositoryImpl,
         val requests: SummaryRequestRepositoryImpl,
     ) {
+        val clock = TestTimeSource()
         private val create = CreateConversationUseCase(conversations)
-        val handle = HandleSummaryLinkUseCase(auth, requests, create)
+        private val handleLink = HandleSummaryLinkUseCase(auth, requests, create, clock)
+        val confirmSwitch = ConfirmAccountSwitchUseCase(auth, requests, create)
         val resume = ResumeSummaryAfterLoginUseCase(requests, create)
+
+        /** 링크 하나를 받는다. 앞 링크와 겹치지 않게 시간을 [HandleSummaryLinkUseCase.REPEAT_WINDOW] 만큼 먼저 흘린다. */
+        suspend fun handle(link: String): SummaryLinkResult {
+            clock += HandleSummaryLinkUseCase.REPEAT_WINDOW
+            return handleLink(link)
+        }
+
+        /** 시간을 흘리지 않고 바로 다음 링크를 받는다. */
+        suspend fun handleRightAway(link: String): SummaryLinkResult = handleLink(link)
     }
 
     /** 대화 저장소가 로그인을 지켜보는 일은 [conversationScope] 에서 돈다. 기본은 테스트가 끝날 때 함께 멈추는 곳이다. */
@@ -106,14 +120,61 @@ class SummaryLinkUseCaseTest {
     }
 
     @Test
-    fun `다른 계정이면 로그아웃하고 그 계정의 로그인을 기다린다`() = runTest(UnconfinedTestDispatcher()) {
+    fun `다른 계정이면 로그아웃하지 않고 계정을 바꿀지 묻는다`() = runTest(UnconfinedTestDispatcher()) {
         val env = env(loggedInAs = "test1")
 
         val result = env.handle(link("test2"))
 
+        assertEquals(SummaryLinkResult.SwitchAccountRequested(request("test2"), currentUserId = "test1"), result)
+        assertEquals(0, env.auth.logoutCount, "묻기 전에 로그아웃했다 — 링크 하나로 남의 로그인을 끊을 수 있다")
+        assertEquals("test1", env.session.user.value?.id)
+        assertNull(env.requests.takeAwaitingLogin(), "묻기 전에 로그인 대기를 걸었다")
+    }
+
+    @Test
+    fun `계정을 바꾸기로 하면 로그아웃하고 그 계정의 로그인을 기다린다`() = runTest(UnconfinedTestDispatcher()) {
+        val env = env(loggedInAs = "test1")
+        val asked = assertIs<SummaryLinkResult.SwitchAccountRequested>(env.handle(link("test2")))
+
+        val result = env.confirmSwitch(asked.request)
+
         assertEquals(SummaryLinkResult.LoginRequired(request("test2"), loggedOut = true), result)
         assertEquals(1, env.auth.logoutCount)
         assertNull(env.session.user.value)
+        assertEquals(request("test2"), env.requests.takeAwaitingLogin())
+    }
+
+    @Test
+    fun `묻는 사이 이미 그 계정이 되었으면 로그아웃하지 않고 요약 대화를 연다`() = runTest(UnconfinedTestDispatcher()) {
+        val env = env(loggedInAs = "test1")
+        val asked = assertIs<SummaryLinkResult.SwitchAccountRequested>(env.handle(link("test2")))
+        env.auth.login("test2", "1234")
+
+        assertIs<SummaryLinkResult.Open>(env.confirmSwitch(asked.request))
+        assertEquals(0, env.auth.logoutCount)
+    }
+
+    @Test
+    fun `앞 링크에서 3초 안에 다시 온 링크는 버린다`() = runTest(UnconfinedTestDispatcher()) {
+        val env = env(loggedInAs = "test1")
+        assertIs<SummaryLinkResult.SwitchAccountRequested>(env.handle(link("test2")))
+
+        assertEquals(SummaryLinkResult.Ignored, env.handleRightAway(link("test3")))
+        env.clock += HandleSummaryLinkUseCase.REPEAT_WINDOW - 1.milliseconds
+        assertEquals(SummaryLinkResult.Ignored, env.handleRightAway(link("test1")), "3초가 지나기 전이다")
+
+        env.clock += 1.milliseconds
+        assertIs<SummaryLinkResult.Open>(env.handleRightAway(link("test1")), "3초가 지나면 다시 받는다")
+        assertEquals(0, env.auth.logoutCount)
+    }
+
+    @Test
+    fun `값이 이상한 링크는 다음 링크를 막지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        val env = env(loggedInAs = "test1")
+
+        assertEquals(SummaryLinkResult.Ignored, env.handle("aiagent://summarize?fileId=a%20b&fileName=a.txt&userId=test1"))
+
+        assertIs<SummaryLinkResult.Open>(env.handleRightAway(link("test1")))
     }
 
     @Test
@@ -130,7 +191,7 @@ class SummaryLinkUseCaseTest {
     fun `기다리던 계정으로 로그인하면 그 사람의 대화에 요약을 걸고 연다`() = runTest(UnconfinedTestDispatcher()) {
         val env = env(loggedInAs = "test1")
         env.conversations.create()
-        env.handle(link("test2"))
+        env.confirmSwitch(assertIs<SummaryLinkResult.SwitchAccountRequested>(env.handle(link("test2"))).request)
 
         env.auth.login("test2", "1234")
         val result = assertIs<SummaryLinkResult.Open>(env.resume(User("test2", "이서연")))
@@ -143,7 +204,7 @@ class SummaryLinkUseCaseTest {
     @Test
     fun `다른 계정으로 로그인하면 기다리던 요약을 버린다`() = runTest(UnconfinedTestDispatcher()) {
         val env = env(loggedInAs = "test1")
-        env.handle(link("test2"))
+        env.confirmSwitch(assertIs<SummaryLinkResult.SwitchAccountRequested>(env.handle(link("test2"))).request)
 
         env.auth.login("test3", "1234")
 

@@ -5,13 +5,17 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.eunilsung.aiagent.bridge.rag.RagClient
+import com.eunilsung.aiagent.bridge.routes.BodyLimits
+import com.eunilsung.aiagent.bridge.routes.cutTo
 import com.eunilsung.aiagent.bridge.talk.TalkClient
 import com.eunilsung.aiagent.shared.api.ApiError
+import com.eunilsung.aiagent.shared.api.BRIDGE_KEY_HEADER
 import com.eunilsung.aiagent.shared.api.ChatRequest
 import com.eunilsung.aiagent.shared.api.ChatStreamEvent
 import com.eunilsung.aiagent.shared.api.ErrorCode
 import com.eunilsung.aiagent.shared.api.HealthResponse
 import com.eunilsung.aiagent.shared.api.LoginResponse
+import com.eunilsung.aiagent.shared.api.MAX_SEND_CONTENT_LENGTH
 import com.eunilsung.aiagent.shared.api.MAX_SUMMARY_FILE_BYTES
 import com.eunilsung.aiagent.shared.api.PeopleResponse
 import com.eunilsung.aiagent.shared.api.SendActionDto
@@ -22,6 +26,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
 import io.ktor.client.request.get
@@ -43,10 +48,15 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.writer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.Buffer
 import kotlinx.io.RawSource
@@ -57,6 +67,7 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertTrue
 
 /**
@@ -72,6 +83,7 @@ class BridgeTest {
         when (request.url.encodedPath) {
             "/auth/login" -> {
                 val body = (request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
+                loginBodies += body
                 if ("\"test1\"" in body && "\"1234\"" in body) {
                     respondJson("""{"token":"talk-token","user":{"id":"test1","name":"김민준","positionSort":3}}""")
                 } else {
@@ -83,10 +95,14 @@ class BridgeTest {
                 if (request.headers[HttpHeaders.Authorization] == "Bearer talk-token") respondJson("""{"id":"test1","name":"김민준"}""")
                 else respondJson("""{"code":"unauthorized"}""", HttpStatusCode.Unauthorized)
             }
+            "/auth/logout" -> {
+                logouts += request.headers[HttpHeaders.Authorization].orEmpty()
+                respond("", HttpStatusCode.NoContent)
+            }
             "/health" -> respondJson("""{"status":"ok"}""")
             "/users" -> respondJson(
                 """{"users":[{"id":"test1","name":"김민준"},{"id":"test2","name":"이서연","organName":"개발팀","positionName":"대리"},""" +
-                    """{"id":"test3","name":"박서준"},{"id":"test4","name":"이서윤"}]}"""
+                    """{"id":"test3","name":"박서준"},{"id":"test4","name":"이서윤"},{"id":"ai","name":"AI 이서"}]}"""
             )
             "/rooms" -> {
                 createdRooms += (request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
@@ -121,9 +137,11 @@ class BridgeTest {
         }
     }
 
-    /** 가짜 Talk 서버가 받은 방 만들기·대화 보내기 본문. */
+    /** 가짜 Talk 서버가 받은 방 만들기·대화 보내기 본문, 로그인 요청 본문, 로그아웃 요청의 Authorization 헤더. */
     private val createdRooms = mutableListOf<String>()
     private val sentMessages = mutableListOf<String>()
+    private val loginBodies = mutableListOf<String>()
+    private val logouts = mutableListOf<String>()
 
     /** 가짜 Talk 서버가 받은 파일 받기 요청의 Authorization 헤더와, 토큰 주인 묻기 횟수. */
     private val fileRequests = mutableListOf<String>()
@@ -163,8 +181,12 @@ class BridgeTest {
         }
     }
 
+    /**
+     * 가짜 Talk·RAG 서버를 끼운 브릿지. 기본 [client] 는 앱처럼 모든 요청에 접속 키([TEST_KEY])를 싣는다.
+     * 키 없이 보내 보려면 [keylessClient] 를 쓴다.
+     */
     private fun bridgeTest(
-        config: BridgeConfig = BridgeConfig(),
+        config: BridgeConfig = KEYED,
         rag: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData = ragHandler,
         talk: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData = talkHandler,
         block: suspend ApplicationTestBuilder.() -> Unit,
@@ -172,8 +194,12 @@ class BridgeTest {
         application {
             module(config, RagClient(HttpClient(MockEngine(rag)), "http://rag"), TalkClient(HttpClient(MockEngine(talk)), "http://talk"))
         }
+        client = createClient { defaultRequest { header(BRIDGE_KEY_HEADER, TEST_KEY) } }
         block()
     }
+
+    /** 접속 키를 싣지 않는 클라이언트 — 앱이 아닌 바깥 사람이다. */
+    private fun ApplicationTestBuilder.keylessClient(): HttpClient = createClient { }
 
     /** 파일 받기만 [files] 가 답하고 나머지는 [talkHandler] 가 답하는 가짜 Talk 서버. */
     private fun talkWithFiles(
@@ -329,7 +355,7 @@ class BridgeTest {
     }
 
     @Test
-    fun `한 시간 한도를 넘기면 429`() = bridgeTest(config = BridgeConfig(chatPerUserHourly = 2)) {
+    fun `한 시간 한도를 넘기면 429`() = bridgeTest(config = KEYED.copy(chatPerUserHourly = 2)) {
         assertEquals(HttpStatusCode.OK, chat("talk-token").status)
         assertEquals(HttpStatusCode.OK, chat("talk-token").status)
         val third = chat("talk-token")
@@ -371,6 +397,19 @@ class BridgeTest {
         assertEquals("room-1-2", json.decodeFromString<SendTalkMessageResponse>(response.bodyAsText()).roomId)
         assertEquals(listOf("""{"memberIds":["test2"]}"""), createdRooms)
         assertEquals(listOf("""{"id":"req-1","content":"내일 회의는 10시입니다.","kind":"text"}"""), sentMessages)
+    }
+
+    /** 본문 상한이 내용 길이 상한보다 작으면 정상 보내기가 413 으로 막힌다. 한글 끝 길이로 확인한다. */
+    @Test
+    fun `한글로 보낼 수 있는 가장 긴 내용도 본문 상한에 걸리지 않는다`() = bridgeTest {
+        val content = "가".repeat(MAX_SEND_CONTENT_LENGTH)
+        val response = client.post("/v1/talk/messages") {
+            header(HttpHeaders.Authorization, "Bearer talk-token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"recipientId":"test2","content":"$content","requestId":"req-long"}""")
+        }
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(1, sentMessages.size)
     }
 
     @Test
@@ -516,7 +555,7 @@ b.pdf"}""",
     }
 
     @Test
-    fun `요약도 대화와 같은 한 시간 한도를 쓴다`() = bridgeTest(config = BridgeConfig(chatPerUserHourly = 2)) {
+    fun `요약도 대화와 같은 한 시간 한도를 쓴다`() = bridgeTest(config = KEYED.copy(chatPerUserHourly = 2)) {
         assertEquals(HttpStatusCode.OK, chat("talk-token").status)
         assertEquals(HttpStatusCode.OK, summarize("talk-token").status)
         val third = summarize("talk-token")
@@ -655,7 +694,414 @@ b.pdf"}""",
         assertLogsHide(logs, "http://rag", FILE_NAME, FILE_NAME.encodeURLParameter())
     }
 
+
+    /** [response] 가 [status] 와 JSON [code] 의 거절인지 본다. */
+    private suspend fun assertRefused(response: HttpResponse, status: HttpStatusCode, code: String, label: String = "") {
+        assertEquals(status, response.status, label)
+        assertEquals(ContentType.Application.Json, response.contentType()?.withoutParameters(), label)
+        assertEquals(code, json.decodeFromString<ApiError>(response.bodyAsText()).code, label)
+    }
+
+    /**
+     * [path] 를 [release] 가 끝날 때까지 붙잡아 두는 가짜 RAG 서버. 요청이 닿으면 [started] 가 끝난다 — 그 뒤로 브릿지는
+     * LLM 자리를 잡고 있다.
+     */
+    private fun ragHeldUntil(path: String, started: CompletableDeferred<Unit>, release: CompletableDeferred<Unit>, body: String) =
+        ragWithSse(path) {
+            started.complete(Unit)
+            CoroutineScope(Dispatchers.IO).writer {
+                release.await()
+                channel.writeFully(body.encodeToByteArray())
+            }.channel
+        }
+
+    private suspend fun ApplicationTestBuilder.loginFrom(forwardedFor: String, id: String = "test1", password: String = "1234") =
+        client.post("/v1/auth/login") {
+            header("X-Forwarded-For", forwardedFor)
+            contentType(ContentType.Application.Json)
+            setBody("""{"id":"$id","password":"$password"}""")
+        }
+
+    @Test
+    fun `접속 키가 없거나 틀리면 모든 경로가 403 client_key_invalid 이고 Talk 와 RAG 에 닿지 않는다`() {
+        var ragCalls = 0
+        bridgeTest(rag = { request -> ragCalls++; ragHandler(this, request) }) {
+            val outsider = keylessClient()
+            val calls: List<Pair<String, suspend (HttpClient) -> HttpResponse>> = listOf(
+                "health" to { it.get("/v1/health") },
+                "login" to { it.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody("""{"id":"test1","password":"1234"}""") } },
+                "logout" to { it.post("/v1/auth/logout") { header(HttpHeaders.Authorization, "Bearer talk-token") } },
+                "chat" to {
+                    it.post("/v1/chat") {
+                        header(HttpHeaders.Authorization, "Bearer talk-token")
+                        header(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
+                        contentType(ContentType.Application.Json)
+                        setBody(CHAT_BODY)
+                    }
+                },
+                "summarize" to {
+                    it.post("/v1/summarize") {
+                        header(HttpHeaders.Authorization, "Bearer talk-token")
+                        header(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
+                        contentType(ContentType.Application.Json)
+                        setBody(SUMMARIZE_BODY)
+                    }
+                },
+                "people" to { it.get("/v1/talk/people?q=test2") { header(HttpHeaders.Authorization, "Bearer talk-token") } },
+                "send" to {
+                    it.post("/v1/talk/messages") {
+                        header(HttpHeaders.Authorization, "Bearer talk-token")
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"recipientId":"test2","content":"안녕","requestId":"req-k"}""")
+                    }
+                },
+                "unknown" to { it.get("/v1/nothing-here") },
+            )
+            for ((label, call) in calls) {
+                assertRefused(call(outsider), HttpStatusCode.Forbidden, ErrorCode.CLIENT_KEY_INVALID, "$label 키 없음")
+                for (wrong in listOf("wrong", TEST_KEY.dropLast(1), TEST_KEY + "x", TEST_KEY.uppercase(), "")) {
+                    val response = call(createClient { defaultRequest { header(BRIDGE_KEY_HEADER, wrong) } })
+                    assertRefused(response, HttpStatusCode.Forbidden, ErrorCode.CLIENT_KEY_INVALID, "$label 틀린 키 '$wrong'")
+                }
+            }
+        }
+        assertEquals(0, ragCalls)
+        assertEquals(0, meCalls)
+        assertTrue(loginBodies.isEmpty() && logouts.isEmpty() && fileRequests.isEmpty() && sentMessages.isEmpty())
+    }
+
+    @Test
+    fun `맞는 접속 키를 실으면 상태 확인과 로그인이 된다`() = bridgeTest {
+        assertEquals(HttpStatusCode.OK, client.get("/v1/health").status)
+        assertEquals(HttpStatusCode.OK, login().status)
+    }
+
+    @Test
+    fun `접속 키 없이 띄운 시험용 브릿지는 키를 보지 않는다`() = bridgeTest(config = BridgeConfig(allowNoKey = true)) {
+        assertEquals(HttpStatusCode.OK, keylessClient().get("/v1/health").status)
+    }
+
+    @Test
+    fun `접속 키 없이 띄운 시험용 브릿지도 프록시(Funnel)를 거쳐 온 요청은 403 client_key_invalid`() =
+        bridgeTest(config = BridgeConfig(allowNoKey = true)) {
+            val outsider = keylessClient()
+            for (name in listOf("X-Forwarded-For", "x-forwarded-proto", "Forwarded", "X-Real-IP", "Via", "Tailscale-Funnel-Request")) {
+                val health = outsider.get("/v1/health") { header(name, "203.0.113.7") }
+                assertRefused(health, HttpStatusCode.Forbidden, ErrorCode.CLIENT_KEY_INVALID, name)
+                val login = outsider.post("/v1/auth/login") {
+                    header(name, "203.0.113.7")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"id":"test1","password":"1234"}""")
+                }
+                assertRefused(login, HttpStatusCode.Forbidden, ErrorCode.CLIENT_KEY_INVALID, name)
+            }
+            assertTrue(loginBodies.isEmpty())
+            assertEquals(HttpStatusCode.OK, outsider.get("/v1/health").status)
+        }
+
+    @Test
+    fun `접속 키가 짧은 설정으로는 브릿지가 뜨지 않는다`() {
+        val error = assertFails {
+            testApplication {
+                application {
+                    module(
+                        BridgeConfig(accessKey = "x".repeat(BridgeConfig.MIN_ACCESS_KEY_LENGTH - 1)),
+                        RagClient(HttpClient(MockEngine(ragHandler)), "http://rag"),
+                        TalkClient(HttpClient(MockEngine(talkHandler)), "http://talk"),
+                    )
+                }
+                startApplication()
+            }
+        }
+        assertTrue(generateSequence(error) { it.cause }.any { "at least" in it.message.orEmpty() }, error.toString())
+    }
+
+    @Test
+    fun `접속 키가 없는 설정으로는 브릿지가 뜨지 않는다`() {
+        val error = assertFails {
+            testApplication {
+                application {
+                    module(BridgeConfig(), RagClient(HttpClient(MockEngine(ragHandler)), "http://rag"), TalkClient(HttpClient(MockEngine(talkHandler)), "http://talk"))
+                }
+                startApplication()
+            }
+        }
+        assertTrue(generateSequence(error) { it.cause }.any { "access key" in it.message.orEmpty() }, error.toString())
+    }
+
+    @Test
+    fun `허용 사용자 목록 밖의 계정은 로그인이 403 user_not_allowed 이고 받은 토큰은 바로 로그아웃시킨다`() =
+        bridgeTest(config = KEYED.copy(allowedUserIds = setOf("test2"))) {
+            assertRefused(login(), HttpStatusCode.Forbidden, ErrorCode.USER_NOT_ALLOWED)
+            assertEquals(listOf("Bearer talk-token"), logouts)
+            assertRefused(chat("talk-token"), HttpStatusCode.Forbidden, ErrorCode.USER_NOT_ALLOWED)
+            assertRefused(summarize("talk-token"), HttpStatusCode.Forbidden, ErrorCode.USER_NOT_ALLOWED)
+            val send = postAsApp("/v1/talk/messages", """{"recipientId":"test2","content":"안녕","requestId":"req-a"}""")
+            assertRefused(send, HttpStatusCode.Forbidden, ErrorCode.USER_NOT_ALLOWED)
+            assertTrue(fileRequests.isEmpty() && summaryCalls.isEmpty() && sentMessages.isEmpty())
+        }
+
+    @Test
+    fun `허용 사용자 목록은 대소문자를 가리지 않는다`() = bridgeTest(config = KEYED.copy(allowedUserIds = setOf("TEST1", "test2"))) {
+        assertEquals(HttpStatusCode.OK, login().status)
+        assertEquals(HttpStatusCode.OK, chat("talk-token").status)
+        assertTrue(logouts.isEmpty())
+    }
+
+    @Test
+    fun `아이디 64자 비밀번호 128자를 넘으면 400 이고 Talk 에 넘기지 않는다`() = bridgeTest {
+        assertRefused(login(id = "a".repeat(65)), HttpStatusCode.BadRequest, ErrorCode.BAD_REQUEST)
+        assertRefused(login(password = "p".repeat(129)), HttpStatusCode.BadRequest, ErrorCode.BAD_REQUEST)
+        assertTrue(loginBodies.isEmpty())
+        assertEquals(HttpStatusCode.Unauthorized, login(id = "a".repeat(64), password = "p".repeat(128)).status)
+        assertEquals(1, loginBodies.size)
+    }
+
+    @Test
+    fun `한 주소에서 1분 한도를 넘긴 로그인은 429 too_many_attempts 이고 다른 주소는 된다`() =
+        bridgeTest(config = KEYED.copy(loginPerIpPerMinute = 3, loginGlobalPerSecond = 100)) {
+            repeat(3) { assertEquals(HttpStatusCode.Unauthorized, loginFrom("203.0.113.5", password = "0000").status) }
+            val fourth = loginFrom("203.0.113.5")
+            assertRefused(fourth, HttpStatusCode.TooManyRequests, ErrorCode.TOO_MANY_ATTEMPTS)
+            assertTrue((fourth.headers[HttpHeaders.RetryAfter]?.toLongOrNull() ?: 0) in 1..60, fourth.headers.toString())
+            assertEquals(3, loginBodies.size)
+            assertEquals(HttpStatusCode.OK, loginFrom("203.0.113.6").status)
+        }
+
+    /** Funnel 은 자기가 본 주소를 X-Forwarded-For 맨 뒤에 둔다. 앞에 지어 넣은 값을 바꿔 가며 보내도 한도를 피하지 못한다. */
+    @Test
+    fun `X-Forwarded-For 앞에 지어 넣은 주소로는 로그인 한도를 피하지 못한다`() =
+        bridgeTest(config = KEYED.copy(loginPerIpPerMinute = 2, loginGlobalPerSecond = 100)) {
+            val statuses = (1..3).map { loginFrom("10.0.0.$it, 198.51.100.7", password = "0000").status }
+            assertEquals(listOf(HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized, HttpStatusCode.TooManyRequests), statuses)
+            assertEquals(2, loginBodies.size)
+        }
+
+    @Test
+    fun `모든 주소를 합친 1초 한도를 넘긴 로그인은 429`() = bridgeTest(config = KEYED.copy(loginPerIpPerMinute = 100, loginGlobalPerSecond = 2)) {
+        val statuses = (1..3).map { loginFrom("192.0.2.$it").status }
+        assertEquals(listOf(HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.TooManyRequests), statuses)
+        assertEquals(2, loginBodies.size)
+    }
+
+    @Test
+    fun `경로마다 본문 상한을 넘으면 413 payload_too_large 이고 뒤로 넘기지 않는다`() {
+        var ragCalls = 0
+        bridgeTest(rag = { request -> ragCalls++; ragHandler(this, request) }) {
+            val bigLogin = """{"id":"test1","password":"1234","pad":"${"a".repeat(BodyLimits.LOGIN.toInt())}"}"""
+            assertRefused(
+                client.post("/v1/auth/login") { contentType(ContentType.Application.Json); setBody(bigLogin) },
+                HttpStatusCode.PayloadTooLarge, ErrorCode.PAYLOAD_TOO_LARGE, "login",
+            )
+            val bigChat = """{"messages":[{"role":"user","content":"${"가".repeat(BodyLimits.CHAT.toInt() / 3 + 1)}"}]}"""
+            assertRefused(chat("talk-token", bigChat), HttpStatusCode.PayloadTooLarge, ErrorCode.PAYLOAD_TOO_LARGE, "chat")
+            val bigSummary = """{"fileId":"$FILE_ID","fileName":"a.pdf","pad":"${"a".repeat(BodyLimits.SUMMARIZE.toInt())}"}"""
+            assertRefused(summarize("talk-token", bigSummary), HttpStatusCode.PayloadTooLarge, ErrorCode.PAYLOAD_TOO_LARGE, "summarize")
+            val bigSend = """{"recipientId":"test2","content":"안녕","requestId":"r","pad":"${"a".repeat(BodyLimits.SEND_MESSAGE.toInt())}"}"""
+            assertRefused(postAsApp("/v1/talk/messages", bigSend), HttpStatusCode.PayloadTooLarge, ErrorCode.PAYLOAD_TOO_LARGE, "send")
+        }
+        assertEquals(0, ragCalls)
+        assertTrue(loginBodies.isEmpty() && fileRequests.isEmpty() && sentMessages.isEmpty())
+    }
+
+    /** Content-Length 없이(chunked) 보내도 읽으면서 세어 상한에서 끊는다. */
+    @Test
+    fun `Content-Length 없는 본문도 상한을 넘으면 413`() = bridgeTest {
+        val body = """{"id":"test1","password":"1234","pad":"${"a".repeat(64 * 1024)}"}""".encodeToByteArray()
+        val response = client.post("/v1/auth/login") {
+            setBody(object : OutgoingContent.WriteChannelContent() {
+                override val contentType = ContentType.Application.Json
+                override suspend fun writeTo(channel: ByteWriteChannel) {
+                    body.toList().chunked(1024).forEach { channel.writeFully(it.toByteArray()); channel.flush() }
+                }
+            })
+        }
+        assertRefused(response, HttpStatusCode.PayloadTooLarge, ErrorCode.PAYLOAD_TOO_LARGE)
+        assertTrue(loginBodies.isEmpty())
+        val small = client.post("/v1/auth/login") {
+            setBody(object : OutgoingContent.WriteChannelContent() {
+                override val contentType = ContentType.Application.Json
+                override suspend fun writeTo(channel: ByteWriteChannel) {
+                    channel.writeFully("""{"id":"test1","password":"1234"}""".encodeToByteArray())
+                }
+            })
+        }
+        assertEquals(HttpStatusCode.OK, small.status)
+    }
+
+    @Test
+    fun `JSON 이 아닌 본문은 400`() = bridgeTest {
+        val response = client.post("/v1/auth/login") {
+            contentType(ContentType.Text.Plain)
+            setBody("""{"id":"test1","password":"1234"}""")
+        }
+        assertRefused(response, HttpStatusCode.BadRequest, ErrorCode.BAD_REQUEST)
+        assertTrue(loginBodies.isEmpty())
+    }
+
+    @Test
+    fun `대화 기록 속 보내기 카드가 상한보다 길면 거절하지 않고 잘라서 RAG 에 넘긴다`() {
+        val ragBodies = mutableListOf<String>()
+        fun history(recipient: String, content: String) =
+            """{"messages":[{"role":"user","content":"보내줘"},""" +
+                """{"role":"assistant","content":"","sendAction":{"recipient":"$recipient","content":"$content","sent":false}},""" +
+                """{"role":"user","content":"다시"}]}"""
+        val emoji = "\uD83D\uDE00"
+        bridgeTest(rag = { request ->
+            if (request.url.encodedPath == "/v1/chat") ragBodies += (request.body as TextContent).text
+            ragHandler(this, request)
+        }) {
+            assertEquals(HttpStatusCode.OK, chat("talk-token", history("가".repeat(101), "나".repeat(6_001))).status)
+            assertEquals(HttpStatusCode.OK, chat("talk-token", history("이서연", "a" + emoji.repeat(3_000))).status)
+            assertEquals(HttpStatusCode.OK, chat("talk-token", history("가".repeat(100), "나".repeat(6_000))).status)
+        }
+        val actions = ragBodies.map { body -> json.decodeFromString<ChatRequest>(body).messages[1].sendAction!! }
+        assertEquals("가".repeat(100), actions[0].recipient)
+        assertEquals("나".repeat(6_000), actions[0].content)
+        assertEquals("a" + emoji.repeat(2_999), actions[1].content, "이모지를 쪼개지 않는다")
+        assertEquals("가".repeat(100) to "나".repeat(6_000), actions[2].recipient to actions[2].content)
+    }
+
+    @Test
+    fun `글자 수 자르기는 UTF-16 단위로 재고 짝을 이룬 글자를 쪼개지 않는다`() {
+        val emoji = "\uD83D\uDE00"
+        assertEquals("짧다", "짧다".cutTo(10))
+        assertEquals("가나", "가나다".cutTo(2))
+        assertEquals("a", "a$emoji".cutTo(2))
+        assertEquals("a$emoji", "a${emoji}b".cutTo(3))
+    }
+
+    @Test
+    fun `대화 기록의 요약 표시는 RAG 서버에 그대로 넘긴다`() {
+        val ragBodies = mutableListOf<String>()
+        val history = """{"messages":[{"role":"user","content":"회의록.pdf 요약해 줘","summary":true},""" +
+            """{"role":"assistant","content":"회의 요약","summary":true},{"role":"user","content":"핵심만 다시"}]}"""
+        bridgeTest(rag = { request ->
+            if (request.url.encodedPath == "/v1/chat") ragBodies += (request.body as TextContent).text
+            ragHandler(this, request)
+        }) {
+            assertEquals(HttpStatusCode.OK, chat("talk-token", history).status)
+        }
+        val forwarded = json.decodeFromString<ChatRequest>(ragBodies.single())
+        assertEquals(listOf(true, true, false), forwarded.messages.map { it.summary })
+    }
+
+    @Test
+    fun `한 사람이 동시에 돌리는 대화가 상한이면 503 busy 이고 끝나면 다시 된다`() {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        bridgeTest(
+            config = KEYED.copy(llmPerUserConcurrency = 1, llmWaitMillis = 100),
+            rag = ragHeldUntil("/v1/chat", started, release, SSE),
+        ) {
+            coroutineScope {
+                val first = async { chat("talk-token") }
+                started.await()
+                val second = chat("talk-token")
+                assertRefused(second, HttpStatusCode.ServiceUnavailable, ErrorCode.BUSY)
+                assertTrue(second.headers[HttpHeaders.RetryAfter] != null)
+                release.complete(Unit)
+                assertEquals(SSE, first.await().bodyAsText())
+            }
+            assertEquals(HttpStatusCode.OK, chat("talk-token").status)
+        }
+    }
+
+    @Test
+    fun `자리가 없어도 잠깐은 기다렸다가 비면 받는다`() {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        bridgeTest(
+            config = KEYED.copy(llmPerUserConcurrency = 1, llmWaitMillis = 5_000),
+            rag = ragHeldUntil("/v1/chat", started, release, SSE),
+        ) {
+            coroutineScope {
+                val first = async { chat("talk-token") }
+                started.await()
+                val second = async { chat("talk-token") }
+                delay(300)
+                release.complete(Unit)
+                assertEquals(HttpStatusCode.OK, first.await().status)
+                assertEquals(HttpStatusCode.OK, second.await().status)
+            }
+        }
+    }
+
+    @Test
+    fun `요약은 대화보다 무겁게 세어 전체 자리를 다 쓰면 대화도 503 busy`() {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        bridgeTest(
+            config = KEYED.copy(llmConcurrency = 2, llmPerUserConcurrency = 2, llmWaitMillis = 100),
+            rag = ragHeldUntil("/v1/summarize", started, release, SUMMARY_SSE),
+        ) {
+            coroutineScope {
+                val summary = async { summarize("talk-token") }
+                started.await()
+                assertRefused(chat("talk-token"), HttpStatusCode.ServiceUnavailable, ErrorCode.BUSY)
+                assertRefused(summarize("talk-token"), HttpStatusCode.ServiceUnavailable, ErrorCode.BUSY)
+                release.complete(Unit)
+                assertEquals(SUMMARY_SSE, summary.await().bodyAsText())
+            }
+            assertEquals(HttpStatusCode.OK, chat("talk-token").status)
+            assertEquals(1, fileRequests.size, "자리를 얻지 못한 요약은 Talk 에서 파일을 받지 않는다")
+        }
+    }
+
+    @Test
+    fun `실패한 요청도 LLM 자리를 돌려준다`() = bridgeTest(
+        config = KEYED.copy(llmPerUserConcurrency = 1, llmWaitMillis = 100, chatPerUserHourly = 1),
+        rag = { error("connection refused") },
+    ) {
+        assertRefused(chat("talk-token"), HttpStatusCode.ServiceUnavailable, ErrorCode.RAG_UNREACHABLE)
+        assertRefused(chat("talk-token"), HttpStatusCode.TooManyRequests, ErrorCode.RATE_LIMITED)
+        assertRefused(summarize("talk-token"), HttpStatusCode.TooManyRequests, ErrorCode.RATE_LIMITED)
+    }
+
+    @Test
+    fun `Talk 의 AI 계정이나 나 자신에게는 보내지 않는다`() = bridgeTest {
+        for (recipient in listOf("ai", "AI", " ai ", "test1", "TEST1")) {
+            val response = postAsApp("/v1/talk/messages", """{"recipientId":"$recipient","content":"안녕","requestId":"req-ai"}""")
+            assertRefused(response, HttpStatusCode.BadRequest, ErrorCode.BAD_REQUEST, recipient)
+        }
+        assertTrue(createdRooms.isEmpty() && sentMessages.isEmpty())
+    }
+
+    @Test
+    fun `사람 찾기 결과에 Talk 의 AI 계정은 나오지 않는다`() = bridgeTest {
+        suspend fun find(q: String) = json.decodeFromString<PeopleResponse>(
+            client.get("/v1/talk/people") {
+                url { parameters.append("q", q) }
+                header(HttpHeaders.Authorization, "Bearer talk-token")
+            }.bodyAsText()
+        ).people.map { it.id }
+
+        assertEquals(emptyList(), find("ai"))
+        assertEquals(listOf("test2", "test4"), find("AI 이서"))
+        assertEquals(listOf("test2", "test4"), find("이서"))
+    }
+
+    @Test
+    fun `사람 찾기도 한 시간 한도가 있다`() = bridgeTest(config = KEYED.copy(peoplePerUserHourly = 1)) {
+        suspend fun find() = client.get("/v1/talk/people?q=test2") { header(HttpHeaders.Authorization, "Bearer talk-token") }
+        assertEquals(HttpStatusCode.OK, find().status)
+        assertRefused(find(), HttpStatusCode.TooManyRequests, ErrorCode.RATE_LIMITED)
+        assertEquals(HttpStatusCode.OK, chat("talk-token").status, "사람 찾기 한도는 대화 한도와 따로 센다")
+    }
+
+    @Test
+    fun `사람 찾기 검색어가 100자를 넘으면 400`() = bridgeTest {
+        val response = client.get("/v1/talk/people") {
+            url { parameters.append("q", "가".repeat(101)) }
+            header(HttpHeaders.Authorization, "Bearer talk-token")
+        }
+        assertRefused(response, HttpStatusCode.BadRequest, ErrorCode.BAD_REQUEST)
+    }
+
     private companion object {
+        /** 시험용 접속 키. 실제 키는 저장소 밖에 있다. */
+        const val TEST_KEY = "fake-bridge-key-for-unit-tests-only-0123456789"
+        val KEYED = BridgeConfig(accessKey = TEST_KEY)
         const val CHAT_BODY = """{"messages":[{"role":"user","content":"반차는 몇 시간이야?"}]}"""
         const val FILE_ID = "3f2b8c1e-7d4a-4f6b-9a0e-2c5d8e1f4a7b"
         /** 공백·&·+·# 이 섞여도 RAG 서버에 그대로 닿아야 한다. */

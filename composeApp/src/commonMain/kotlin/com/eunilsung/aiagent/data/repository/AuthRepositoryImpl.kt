@@ -1,6 +1,7 @@
 package com.eunilsung.aiagent.data.repository
 
 import com.eunilsung.aiagent.data.local.SessionStore
+import com.eunilsung.aiagent.data.mapper.bridgeRefusalOf
 import com.eunilsung.aiagent.data.remote.BridgeClient
 import com.eunilsung.aiagent.data.remote.ServerResult
 import com.eunilsung.aiagent.domain.model.LoginResult
@@ -26,7 +27,7 @@ class AuthRepositoryImpl(
                 sessionStore.save(result.value.token, user)
                 LoginResult.Success(user)
             }
-            is ServerResult.Rejected -> when (result.status) {
+            is ServerResult.Rejected -> bridgeRefusalOf(result.code)?.let { LoginResult.Refused(it) } ?: when (result.status) {
                 401 -> LoginResult.InvalidCredentials
                 429 -> LoginResult.Locked
                 503 -> LoginResult.Unreachable

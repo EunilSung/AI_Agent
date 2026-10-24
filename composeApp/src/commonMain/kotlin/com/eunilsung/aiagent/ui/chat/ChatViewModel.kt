@@ -3,6 +3,7 @@ package com.eunilsung.aiagent.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.eunilsung.aiagent.domain.model.AnswerFailure
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.usecase.ChatUseCases
 import kotlinx.coroutines.Job
@@ -76,7 +77,8 @@ class ChatViewModel(
         val message = uiState.value.messages.firstOrNull { it.id == messageId } ?: return
         val personId = uiState.value.recipientOf(message) ?: return
         viewModelScope.launch {
-            if (!useCases.confirmSend(conversationId, messageId, personId)) _events.send(ChatEvent.SendFailed)
+            val result = useCases.confirmSend(conversationId, messageId, personId)
+            if (result is SendResult.Failed) _events.send(ChatEvent.SendFailed(result.refusal))
         }
     }
 

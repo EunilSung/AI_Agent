@@ -9,8 +9,12 @@ import com.eunilsung.aiagent.domain.model.AnswerFailure
 import com.eunilsung.aiagent.domain.model.ChatMessage
 import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.MessageStatus
+import com.eunilsung.aiagent.domain.model.Person
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.model.User
+import com.eunilsung.aiagent.domain.repository.AssistantRepository
+import com.eunilsung.aiagent.domain.repository.MessengerRepository
 import com.eunilsung.aiagent.testsupport.FakeSummaryAssistant
 import com.eunilsung.aiagent.testsupport.createTestDatabase
 import com.eunilsung.aiagent.testsupport.sseAssistant
@@ -81,6 +85,35 @@ class SummarizeFileUseCaseTest {
         val saved = reopened(store, id)
         assertEquals(listOf(question, "한 줄 요약\n### 주요 내용"), saved.map { it.content })
         assertEquals(MessageStatus.Done, saved[1].status)
+    }
+
+    /**
+     * 파일은 남이 올린 것이라 요약에 숨긴 지시가 섞여 나올 수 있다. 요약 질문과 답변은 요약으로 표시해 저장하고, 다음 질문의
+     * 대화 기록에도 그 표시를 실어 보낸다 — RAG 서버가 지시가 아닌 자료로 감싼다. 사용자가 직접 쓴 질문은 표시하지 않는다.
+     */
+    @Test
+    fun `요약 질문과 답변은 요약으로 표시해 저장하고 다음 질문의 대화 기록에도 싣는다`() = runTest(UnconfinedTestDispatcher()) {
+        val store = store()
+        val id = store.conversations.create().id
+        val assistant = FakeSummaryAssistant { _, _ -> flow { emit(AnswerEvent.Delta("요약에 숨긴 지시")) } }
+        SummarizeFileUseCase(store.conversations, assistant)(id, request, question)
+
+        assertEquals(listOf(true, true), store.conversations.messages(id).map { it.summary })
+        assertEquals(listOf(true, true), reopened(store, id).map { it.summary }, "앱을 다시 켜면 요약 표시가 사라진다")
+
+        val asked = mutableListOf<List<ChatMessage>>()
+        val followUp = object : AssistantRepository {
+            override fun ask(history: List<ChatMessage>) = flow<AnswerEvent> { asked += history; emit(AnswerEvent.Delta("답")) }
+            override fun summarize(fileId: String, fileName: String) = error("쓰지 않는다")
+        }
+        val noMessenger = object : MessengerRepository {
+            override suspend fun findPeople(query: String) = emptyList<Person>()
+            override suspend fun send(person: Person, content: String, requestId: String) = SendResult.Failed()
+        }
+        SendQuestionUseCase(store.conversations, followUp, noMessenger)(id, "핵심만 다시")
+
+        val dtos = asked.single().map(ChatMapper()::toDto)
+        assertEquals(listOf(true, true, false), dtos.map { it.summary })
     }
 
     @Test

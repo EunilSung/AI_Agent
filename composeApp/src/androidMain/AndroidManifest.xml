@@ -4,8 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-        usesCleartextTraffic: 개발 중에는 이 Mac 의 브릿지(http://10.0.2.2:8095)에 붙는다.
-        터널로 바깥에 열 때는 https 주소를 쓴다.
+        networkSecurityConfig: 평문(http)은 에뮬레이터에서 이 Mac 의 브릿지(http://10.0.2.2:8095)와 localhost 에만 허용한다.
+        그 밖(실기기·터널)은 https 주소를 쓴다.
     -->
     <application
         android:name="com.eunilsung.aiagent.MyApplication"
@@ -14,7 +14,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.App">
         <activity
             android:exported="true"

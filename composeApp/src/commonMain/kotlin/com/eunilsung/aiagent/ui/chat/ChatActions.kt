@@ -1,6 +1,7 @@
 package com.eunilsung.aiagent.ui.chat
 
 import com.eunilsung.aiagent.domain.model.AnswerFailure
+import com.eunilsung.aiagent.domain.model.BridgeRefusal
 import com.eunilsung.aiagent.domain.model.SummaryRequest
 
 sealed interface ChatActions {
@@ -23,7 +24,8 @@ sealed interface ChatEvent {
     data class AnswerFailed(val failure: AnswerFailure) : ChatEvent
     /** 로그인이 풀려 로그아웃했다. */
     data object SessionExpired : ChatEvent
-    data object SendFailed : ChatEvent
+    /** 보내지 못했다. [refusal] 이 있으면 그 이유를 알리고, 없으면 다시 보내 보라고 알린다. */
+    data class SendFailed(val refusal: BridgeRefusal? = null) : ChatEvent
     /** Talk 요약 링크로 이 대화에 요약이 걸렸다. 화면이 질문 문구를 만들어 [ChatActions.OnSummarize] 로 돌려준다. */
     data class SummaryRequested(val request: SummaryRequest) : ChatEvent
 }

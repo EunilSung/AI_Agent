@@ -1,6 +1,7 @@
 package com.eunilsung.aiagent.bridge.routes
 
 import com.eunilsung.aiagent.bridge.auth.TokenVerifier
+import com.eunilsung.aiagent.bridge.limit.ConcurrencyLimiter
 import com.eunilsung.aiagent.bridge.limit.RateLimiter
 import com.eunilsung.aiagent.bridge.rag.RagClient
 import com.eunilsung.aiagent.shared.api.ApiError
@@ -8,13 +9,14 @@ import com.eunilsung.aiagent.shared.api.ChatRequest
 import com.eunilsung.aiagent.shared.api.ChatRole
 import com.eunilsung.aiagent.shared.api.ChatStreamEvent
 import com.eunilsung.aiagent.shared.api.ErrorCode
+import com.eunilsung.aiagent.shared.api.MAX_SEND_CONTENT_LENGTH
+import com.eunilsung.aiagent.shared.api.MAX_SEND_RECIPIENT_LENGTH
 import com.eunilsung.aiagent.shared.api.StreamErrorCode
 import com.eunilsung.aiagent.shared.api.StreamErrorEvent
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.request.receive
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.Route
@@ -53,23 +55,27 @@ private val INTERRUPTED_EVENTS: ByteArray = buildString {
  * AI 대화 — RAG 서버의 SSE 를 받는 대로 앱에 흘려보낸다.
  *
  * 브릿지는 SSE 내용을 해석하지 않는다. 조각을 받을 때마다 바로 내보내야 글자가 한 번에 몰려 나오지 않는다.
+ * 답변을 다 보낼 때까지 [llm] 의 자리 하나([ConcurrencyLimiter.CHAT_WEIGHT])를 잡는다. 자리가 없으면 503 `busy` 다.
  */
-fun Route.chatRoutes(rag: RagClient, verifier: TokenVerifier, limiter: RateLimiter) {
+fun Route.chatRoutes(rag: RagClient, verifier: TokenVerifier, limiter: RateLimiter, llm: ConcurrencyLimiter) {
     post("/v1/chat") {
         val user = call.requireUser(verifier) ?: return@post
-        val request = runCatching { call.receive<ChatRequest>() }.getOrNull()
-        if (request == null || !request.isValid()) {
-            call.respondError(HttpStatusCode.BadRequest, ApiError(ErrorCode.BAD_REQUEST))
-            return@post
-        }
-        if (!limiter.tryAcquire(user.id)) {
-            call.respondError(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.RATE_LIMITED))
-            return@post
-        }
-        call.application.environment.log.info("chat user=${user.id} messages=${request.messages.size}")
+        val request = call.receiveJsonOrReject(ChatRequest.serializer(), BodyLimits.CHAT) { it.isValid() }
+            ?.withSendActionsCut()
+            ?: return@post
+        val permit = llm.acquire(user.id, ConcurrencyLimiter.CHAT_WEIGHT) ?: return@post call.respondBusy()
+        try {
+            if (!limiter.tryAcquire(user.id)) {
+                call.respondError(HttpStatusCode.TooManyRequests, ApiError(ErrorCode.RATE_LIMITED))
+                return@post
+            }
+            call.application.environment.log.info("chat user=${user.id} messages=${request.messages.size}")
 
-        val opened = rag.streamChat(request) { body -> call.relaySse(body) }
-        if (!opened) call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.RAG_UNREACHABLE))
+            val opened = rag.streamChat(request) { body -> call.relaySse(body) }
+            if (!opened) call.respondError(HttpStatusCode.ServiceUnavailable, ApiError(ErrorCode.RAG_UNREACHABLE))
+        } finally {
+            permit.release()
+        }
     }
 }
 
@@ -126,9 +132,34 @@ private suspend fun ByteWriteChannel.copySseFrom(body: ByteReadChannel): Throwab
     }
 }
 
+/** 대화 기록이 받을 만한지. 보내기 카드 기록의 길이는 거르지 않고 [withSendActionsCut] 이 자른다. */
 private fun ChatRequest.isValid(): Boolean =
     messages.isNotEmpty() &&
         messages.size <= MAX_MESSAGES &&
         messages.last().role == ChatRole.USER &&
         messages.all { (it.role == ChatRole.USER || it.role == ChatRole.ASSISTANT) && it.content.length <= MAX_CONTENT_LENGTH } &&
         messages.last().content.isNotBlank()
+
+/**
+ * 대화 기록 속 보내기 카드([com.eunilsung.aiagent.shared.api.SendActionDto])의 받는 사람·내용을 [MAX_SEND_RECIPIENT_LENGTH]·
+ * [MAX_SEND_CONTENT_LENGTH] 자(UTF-16 단위)로 자른다. RAG 서버는 이 값을 도구 호출 인자로 LLM 에 넣고 같은 상한을 넘으면
+ * 받지 않는다. 예전 앱·RAG 서버는 카드 내용을 자르지 않았으므로, 긴 카드가 남은 대화도 거절하지 않고 계속 쓸 수 있게 자른다.
+ */
+private fun ChatRequest.withSendActionsCut(): ChatRequest = copy(
+    messages = messages.map { message ->
+        val action = message.sendAction ?: return@map message
+        message.copy(
+            sendAction = action.copy(
+                recipient = action.recipient.cutTo(MAX_SEND_RECIPIENT_LENGTH),
+                content = action.content.cutTo(MAX_SEND_CONTENT_LENGTH),
+            ),
+        )
+    },
+)
+
+/** [limit] 자(UTF-16 단위) 안으로 자른다. 잘리는 자리에서 이모지처럼 두 단위를 쓰는 글자가 쪼개지면 그 글자는 뺀다. */
+internal fun String.cutTo(limit: Int): String {
+    if (length <= limit) return this
+    val end = if (this[limit - 1].isHighSurrogate()) limit - 1 else limit
+    return substring(0, end)
+}

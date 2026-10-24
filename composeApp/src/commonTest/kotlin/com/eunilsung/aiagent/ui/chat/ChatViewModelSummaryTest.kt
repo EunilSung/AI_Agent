@@ -9,6 +9,7 @@ import com.eunilsung.aiagent.domain.model.AnswerEvent
 import com.eunilsung.aiagent.domain.model.AnswerFailure
 import com.eunilsung.aiagent.domain.model.MessageStatus
 import com.eunilsung.aiagent.domain.model.Person
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.model.User
 import com.eunilsung.aiagent.domain.repository.MessengerRepository
@@ -60,7 +61,7 @@ class ChatViewModelSummaryTest {
 
     private object NoMessenger : MessengerRepository {
         override suspend fun findPeople(query: String): List<Person> = emptyList()
-        override suspend fun send(person: Person, content: String, requestId: String): Boolean = false
+        override suspend fun send(person: Person, content: String, requestId: String): SendResult = SendResult.Failed()
     }
 
     private class Env(

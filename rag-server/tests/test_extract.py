@@ -385,6 +385,311 @@ def test_streamed_xlsx_sheet_is_not_limited_like_body_xml(monkeypatch):
     assert error_code("rows.xlsx", data) == BROKEN_FILE
 
 
+XLSX_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+XLSX_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+OPC_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+XLSX_SHARED_STRINGS_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+XLSX_WORKBOOK_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+XLSX_WORKSHEET_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+
+
+def content_types(*overrides: tuple[str, str], extra: str = "") -> str:
+    body = "".join(f'<Override PartName="/{name}" ContentType="{kind}"/>' for name, kind in overrides)
+    return (
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        f"{body}{extra}</Types>"
+    )
+
+
+def zip_of(files: dict[str, str | bytes]) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, body in files.items():
+            archive.writestr(name, body)
+    return out.getvalue()
+
+
+def hand_xlsx(sheets: dict[str, str], strings: str | None = None, *, workbook: str = "xl/workbook.xml",
+              strings_part: str = "xl/sharedStrings.xml", types: str | None = None, workbook_extra: str = "",
+              workbook_tail: str = "", extra_rels: str = "", extra_files: dict[str, str | bytes] | None = None) -> bytes:
+    """손으로 만든 xlsx. sheets 는 {시트 이름: 시트 XML 의 sheetData 안쪽}, strings 는 공유 문자열 `<sst>` 안쪽이다.
+
+    통합 문서·공유 문자열 항목 이름(workbook·strings_part)과 [Content_Types].xml(types)을 바꿔 볼 수 있다.
+    """
+    folder, base = workbook.rsplit("/", 1)
+    sheet_list = "".join(f'<sheet name="{title}" sheetId="{i}" r:id="rId{i}"/>' for i, title in enumerate(sheets, 1))
+    rels = "".join(
+        f'<Relationship Id="rId{i}" Type="{XLSX_REL}/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1, len(sheets) + 1)
+    )
+    if strings is not None:
+        rels += f'<Relationship Id="rIdS" Type="{XLSX_REL}/sharedStrings" Target="/{strings_part}"/>'
+    if types is None:
+        overrides = [(workbook, XLSX_WORKBOOK_TYPE)]
+        overrides += [(f"{folder}/worksheets/sheet{i}.xml", XLSX_WORKSHEET_TYPE) for i in range(1, len(sheets) + 1)]
+        if strings is not None:
+            overrides.append((strings_part, XLSX_SHARED_STRINGS_TYPE))
+        types = content_types(*overrides)
+    files = {
+        "[Content_Types].xml": types,
+        "_rels/.rels": f'<Relationships xmlns="{OPC_REL}"><Relationship Id="rId1" Type="{XLSX_REL}/officeDocument" Target="{workbook}"/></Relationships>',
+        workbook: f'<workbook xmlns="{XLSX_MAIN}" xmlns:r="{XLSX_REL}">{workbook_extra}<sheets>{sheet_list}</sheets>{workbook_tail}</workbook>',
+        f"{folder}/_rels/{base}.rels": f'<Relationships xmlns="{OPC_REL}">{rels}{extra_rels}</Relationships>',
+    }
+    for i, body in enumerate(sheets.values(), 1):
+        files[f"{folder}/worksheets/sheet{i}.xml"] = f'<worksheet xmlns="{XLSX_MAIN}"><sheetData>{body}</sheetData></worksheet>'
+    if strings is not None:
+        files[strings_part] = f'<sst xmlns="{XLSX_MAIN}">{strings}</sst>'
+    files.update(extra_files or {})
+    return zip_of(files)
+
+
+def shared_strings_xlsx(count: int = 1500, part: str = "xl/sharedStrings.xml", types: str | None = None) -> bytes:
+    """공유 문자열을 쓰는 xlsx 를 손으로 만든다(openpyxl 은 글을 칸 안에 바로 적어 공유 문자열을 만들지 않는다)."""
+    strings = "".join(f"<si><t>문자열 {i} {'가' * 20}</t></si>" for i in range(count))
+    rows = "".join(f'<row r="{i + 1}"><c r="A{i + 1}" t="s"><v>{i}</v></c></row>' for i in range(count))
+    return hand_xlsx({"목록": rows}, strings, strings_part=part, types=types)
+
+
+def openpyxl_text(data: bytes) -> str:
+    """예전 xlsx_text 처럼 openpyxl(read_only, data_only)로 읽은 글. 직접 흘려 읽는 xlsx_text 와 견주는 데 쓴다."""
+    from openpyxl import load_workbook
+
+    sink = extract.TextSink(extract.MAX_TEXT_CHARS)
+    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        scan_left, first_sheet = extract.MAX_SCAN_ROWS, True
+        for sheet in workbook.worksheets:
+            if scan_left <= 0:
+                break
+            rows = scanned = 0
+            for values in sheet.iter_rows(values_only=True, max_col=extract.MAX_SHEET_COLUMNS, max_row=scan_left):
+                scanned += 1
+                line = extract.row_line(extract.cell_text(v) for v in values)
+                if all(v is None for v in values) or not line:
+                    continue
+                if not rows:
+                    if not first_sheet:
+                        sink.add("")
+                    first_sheet = False
+                    sink.add(f"## 시트: {sheet.title}")
+                rows += 1
+                if rows > extract.MAX_SHEET_ROWS:
+                    sink.add(f"… ({extract.MAX_SHEET_ROWS}행 이후 생략)")
+                    break
+                sink.add(line)
+            scan_left -= scanned
+    finally:
+        workbook.close()
+    return sink.text()
+
+
+def test_xlsx_shared_strings_are_read_with_count_and_char_limits(monkeypatch):
+    """공유 문자열은 흘려 읽고, 들고 있는 문자열 수·글자 수에 끝이 있다. 넘는 문자열을 가리키는 칸은 빈칸이고 truncated 다."""
+    data = shared_strings_xlsx()
+    whole = extract.extract("strings.xlsx", data)
+    assert whole.text.split("\n")[1].startswith("문자열 0") and "문자열 1499 " in whole.text and not whole.truncated
+    assert whole.text == openpyxl_text(data)
+
+    monkeypatch.setattr(extract, "MAX_XLSX_STRINGS", 10)
+    few = extract.extract("strings.xlsx", data)
+    assert "문자열 9 " in few.text and "문자열 10 " not in few.text and few.truncated
+    monkeypatch.setattr(extract, "MAX_XLSX_STRINGS", 10**6)
+
+    monkeypatch.setattr(extract, "MAX_XLSX_STRING_CHARS", 100)
+    short = extract.extract("strings.xlsx", data)
+    assert "문자열 2 " in short.text and "문자열 3 " not in short.text and short.truncated
+    monkeypatch.setattr(extract, "MAX_XLSX_STRING_CHARS", 10**8)
+
+    monkeypatch.setattr(extract, "MAX_XLSX_STRINGS_READ_BYTES", 5000)
+    cut = extract.extract("strings.xlsx", data)
+    assert cut.text.split("\n")[1].startswith("문자열 0") and "문자열 1499 " not in cut.text and cut.truncated
+
+
+@pytest.mark.parametrize("child", ["<々/>", "<ꯍ/>", "<\U00010000/>"])
+def test_xlsx_content_types_do_not_decide_what_is_read(monkeypatch, child):
+    """어느 항목을 어떻게 읽을지는 관계(.rels)로 정한다. [Content_Types].xml 은 읽지 않는다 — 해석기마다 받아 주는 글자가 달라
+    (expat 은 거절하고 lxml 은 받는 요소 이름) 그 차이로 상한을 피하던 길이 없다. 이름을 바꾼 공유 문자열에도 같은 끝이 걸린다."""
+    types = content_types(("xl/strs.bin", XLSX_SHARED_STRINGS_TYPE), extra=child)
+    data = shared_strings_xlsx(part="xl/strs.bin", types=types)
+    assert extract_text("renamed.xlsx", data).split("\n")[1].startswith("문자열 0")
+    monkeypatch.setattr(extract, "MAX_XLSX_STRINGS", 10)
+    result = extract.extract("renamed.xlsx", data)
+    assert "문자열 9 " in result.text and "문자열 10 " not in result.text and result.truncated
+    broken_types = shared_strings_xlsx(count=3, types="this is not xml")
+    assert extract_text("odd.xlsx", broken_types) == "## 시트: 목록\n" + "\n".join(f"문자열 {i} {'가' * 20}" for i in range(3))
+
+
+def test_xlsx_renamed_workbook_is_found_through_the_package_relationships(monkeypatch):
+    rows = '<row r="1"><c r="A1" t="inlineStr"><is><t>이름 바꾼 통합 문서</t></is></c></row>'
+    padding = "<definedNames>" + "".join(f'<definedName name="n{i}">1</definedName>' for i in range(200)) + "</definedNames>"
+    data = hand_xlsx({"표": rows}, workbook="xl/wb.bin", workbook_extra="<workbookPr/>", workbook_tail=padding)
+    assert extract_text("wb.xlsx", data) == "## 시트: 표\n이름 바꾼 통합 문서"
+    infos = {i.filename: i.file_size for i in zipfile.ZipFile(io.BytesIO(data)).infolist()}
+    assert infos["xl/wb.bin"] > max(size for name, size in infos.items() if name.endswith(".rels"))
+    monkeypatch.setattr(extract, "MAX_ZIP_PART_BYTES", max(size for name, size in infos.items() if name.endswith(".rels")))
+    assert extract.extract("wb.xlsx", data).truncated, "통합 문서도 읽는 바이트 수에 끝이 있다"
+
+
+def test_xlsx_chartsheets_are_not_read():
+    rows = '<row r="1"><c r="A1" t="inlineStr"><is><t>표 시트</t></is></c></row>'
+    data = hand_xlsx(
+        {"표": rows},
+        workbook_extra="",
+        extra_rels=f'<Relationship Id="rIdC" Type="{XLSX_REL}/chartsheet" Target="chart.bin"/>',
+        extra_files={"xl/chart.bin": "<chartsheet>" + "<x/>" * 1000},
+    )
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    workbook = archive.read("xl/workbook.xml").decode().replace("</sheets>", '<sheet name="차트" sheetId="9" r:id="rIdC"/></sheets>')
+    data = zip_of({**{n: archive.read(n) for n in archive.namelist()}, "xl/workbook.xml": workbook})
+    assert extract_text("chart.xlsx", data) == "## 시트: 표\n표 시트"
+
+
+def test_xlsx_is_read_without_building_a_tree():
+    """행 밖의 요소·칸이 아주 많은 행·같은 번호가 되풀이되는 행이 있어도 트리를 만들지 않아 메모리가 늘지 않는다.
+
+    openpyxl 은 read_only 에서도 이런 요소를 버리지 않아, 이 시트 하나에 수백 MB 를 쓴다.
+    """
+    import tracemalloc
+
+    noise = "<x/>" * 300_000
+    wide = '<row r="1">' + "<c><v>1</v></c>" * 100_000 + "</row>"
+    repeated = '<row r="2"><c r="A2" t="inlineStr"><is><t>둘째 행</t></is></c></row>' * 50_000
+    body = f'{noise}{wide}{repeated}<row r="3"><c r="B3"><v>3</v></c></row>'
+    data = hand_xlsx({"큰 시트": body})
+    tracemalloc.start()
+    try:
+        text = extract_text("noisy.xlsx", data)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    first = " | ".join(["1"] * extract.MAX_SHEET_COLUMNS)
+    assert text == f"## 시트: 큰 시트\n{first}\n둘째 행\n | 3"
+    assert peak < 4 * 1024 * 1024, peak
+
+
+def test_xlsx_rows_are_numbered_like_openpyxl():
+    """앞서 내놓은 행 번호보다 작거나 같은 번호의 행은 건너뛰고, 번호가 없는 행은 앞 행 + 1 이다(openpyxl 과 같다)."""
+    def row(text, number=None):
+        attribute = f' r="{number}"' if number is not None else ""
+        return f'<row{attribute}><c t="inlineStr"><is><t>{text}</t></is></c></row>'
+
+    data = hand_xlsx({"번호": row("가", 1) + row("나", 1) + row("다", 2) + row("라") + row("마", 2) + row("바", 5)})
+    assert extract_text("rows.xlsx", data) == "## 시트: 번호\n가\n다\n라\n바"
+    assert extract_text("rows.xlsx", data) == openpyxl_text(data)
+
+
+def test_xlsx_cell_values_match_openpyxl():
+    from openpyxl import Workbook
+    from openpyxl.utils.datetime import CALENDAR_MAC_1904
+
+    def build(epoch=None):
+        workbook = Workbook()
+        if epoch is not None:
+            workbook.epoch = epoch
+        sheet = workbook.active
+        sheet.title = "값"
+        sheet.append(["글", "줄\n바꿈", 7, 2.5, 1e20, True, False, None, "끝"])
+        sheet.append([datetime.date(2026, 10, 24), datetime.datetime(2026, 10, 24, 9, 30), datetime.time(13, 5)])
+        sheet.append([datetime.timedelta(hours=26, minutes=3), "=1+1", -0.0])
+        sheet["BZ4"] = "60칸 밖"
+        sheet["A5"] = "넷째 다음"
+        workbook.create_sheet("빈 시트")
+        out = io.BytesIO()
+        workbook.save(out)
+        return out.getvalue()
+
+    for data in (build(), build(CALENDAR_MAC_1904)):
+        assert extract_text("values.xlsx", data) == openpyxl_text(data)
+
+    strings = (
+        "<si><t>보통</t></si>"
+        "<si><r><rPr><b/></rPr><t>굵은 </t></r><r><t>조각</t></r></si>"
+        "<si><t>漢字</t><rPh sb=\"0\" eb=\"2\"><t>かんじ</t></rPh></si>"
+        "<si><t>x005F_밑줄</t></si>"
+    )
+    cells = (
+        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c>'
+        '<c r="D1" t="s"><v>3</v></c><c r="E1" t="b"><v>1</v></c><c r="F1" t="e"><v>#DIV/0!</v></c>'
+        '<c r="G1" t="str"><f>A1</f><v>수식 값</v></c><c r="H1" t="inlineStr"><is><r><t>안 </t></r><r><t>글</t></r></is></c></row>'
+        '<row r="2"><c r="C2"><v>12.50</v></c><c r="A2" t="d"><v>2026-10-24T08:00:00</v></c></row>'
+    )
+    data = hand_xlsx({"손": cells}, strings)
+    assert extract_text("hand.xlsx", data) == openpyxl_text(data)
+    assert extract_text("hand.xlsx", data).split("\n")[1] == "보통 | 굵은 조각 | 漢字 | 밑줄 | True | #DIV/0! | 수식 값 | 안 글"
+
+
+def test_xlsx_cell_text_and_bad_values_are_kept_as_text(monkeypatch):
+    monkeypatch.setattr(extract, "MAX_CELL_CHARS", 5)
+    cells = (
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>가나다라마바사</t></is></c><c r="B1"><v>숫자 아님</v></c>'
+        '<c r="C1" t="s"><v>99</v></c><c r="ZZZZ1"><v>1</v></c></row>'
+    )
+    assert extract_text("bad.xlsx", hand_xlsx({"이상": cells})) == "## 시트: 이상\n가나다라마 | 숫자 아님 |  | 1"
+
+
+def test_xlsx_read_limits_are_tens_of_megabytes():
+    assert extract.MAX_XLSX_STRINGS_READ_BYTES <= 64 * 1024 * 1024
+    assert extract.MAX_XLSX_SHEETS_READ_BYTES <= 128 * 1024 * 1024
+    assert extract.MAX_XLSX_STRINGS <= 1_000_000 and extract.MAX_XLSX_STRING_CHARS <= 8_000_000
+
+
+def renamed_part(data: bytes, old: str, new: str) -> bytes:
+    """zip 항목 old 를 new 로 바꾸고, [Content_Types].xml·관계 파일 속 이름도 함께 바꾼다(라이브러리는 그대로 읽는다)."""
+    source = zipfile.ZipFile(io.BytesIO(data))
+    old_base, new_base = old.rsplit("/", 1)[1], new.rsplit("/", 1)[1]
+    files = {}
+    for name in source.namelist():
+        body = source.read(name)
+        if name.endswith(".rels") or name == "[Content_Types].xml":
+            body = body.replace(old.encode(), new.encode()).replace(old_base.encode(), new_base.encode())
+        files[new if name == old else name] = body
+    return zip_of(files)
+
+
+@pytest.mark.parametrize("kind", ["docx", "pptx"])
+def test_renamed_office_xml_is_still_counted_as_xml(monkeypatch, kind):
+    """python-docx·python-pptx 는 [Content_Types].xml 이 정한 형식으로 읽으므로 이름을 .bin 으로 바꾼 XML 도 트리로 펼친다.
+    그래서 이름이 아니라 첫머리로 XML 인지 가려 한 항목 상한을 건다."""
+    if kind == "docx":
+        data = renamed_part(make_docx(lambda d: [d.add_paragraph("가" * 300) for _ in range(1500)]), "word/document.xml", "word/document.bin")
+        part = "word/document.bin"
+    else:
+        data = renamed_part(make_pptx(lambda p: titled_slides(p, ["가" * 30000])), "ppt/slides/slide1.xml", "ppt/slides/slide1.bin")
+        part = "ppt/slides/slide1.bin"
+    infos = zipfile.ZipFile(io.BytesIO(data)).infolist()
+    size = next(i.file_size for i in infos if i.filename == part)
+    others = max(i.file_size for i in infos if i.filename != part and i.filename.endswith((".xml", ".rels")))
+    assert size > others
+    assert extract_text(f"renamed.{kind}", data).replace("## 슬라이드 1\n", "").startswith("가가가")
+    monkeypatch.setattr(extract, "MAX_ZIP_PART_BYTES", others)
+    assert error_code(f"renamed.{kind}", data) == BROKEN_FILE
+
+
+@pytest.mark.parametrize("head", [
+    b'<?xml version="1.0"?><a/>', b" \r\n\t<a/>", b"\xef\xbb\xbf <a/>", " <a/>".encode("utf-16"),
+    "﻿<a/>".encode("utf-16-be"), "<?xml?>".encode("utf-16-le"), "<a/>".encode("utf-32-le"),
+    "﻿<a/>".encode("utf-32-be"), b"\x4c\x6f\xa7\x94", b"   ", b"",
+])
+def test_may_be_xml(head):
+    assert extract.may_be_xml(head)
+
+
+@pytest.mark.parametrize("head", [
+    b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff\xe0", b"GIF89a", b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
+    b"\x00\x00\x00\x18ftypmp42", b"%PDF-1.7", b"\x01\x00\x00\x00", b"hello <a/>",
+])
+def test_binary_heads_are_not_xml(head):
+    assert not extract.may_be_xml(head)
+
+
+def test_zip_with_too_many_entries_is_broken(monkeypatch):
+    docx = make_docx(lambda d: d.add_paragraph("짧은 문단"))
+    monkeypatch.setattr(extract, "MAX_ZIP_ENTRIES", len(zipfile.ZipFile(io.BytesIO(docx)).infolist()) - 1)
+    assert error_code("many.docx", docx) == BROKEN_FILE
+
+
 def titled_slides(presentation, titles):
     for title in titles:
         presentation.slides.add_slide(presentation.slide_layouts[5]).shapes.title.text = title
@@ -545,6 +850,29 @@ def test_hwpx_section_is_streamed_not_loaded_whole(monkeypatch):
     assert peak < len(xml) // 2
 
 
+def test_hwpx_elements_inside_text_are_not_kept_in_memory():
+    """`<hp:t>` 안에 요소를 아주 많이 넣어도 트리를 만들지 않아 메모리가 늘지 않는다. 표시 요소(탭 등)는 그대로 글이 된다."""
+    import tracemalloc
+
+    xml = hwpx_section(f"<hp:p><hp:run><hp:t>시작{'<hp:x/>' * 300_000}<hp:tab/>끝</hp:t></hp:run></hp:p>")
+    data = make_hwpx({"Contents/section0.xml": xml})
+    tracemalloc.start()
+    try:
+        text = extract_text("noisy.hwpx", data)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert text == "시작\t끝"
+    assert peak < len(xml) // 4, peak
+
+
+def test_hwpx_long_paragraph_is_cut_at_max_chars(monkeypatch):
+    monkeypatch.setattr(extract, "MAX_TEXT_CHARS", 50)
+    data = make_hwpx({"Contents/section0.xml": hwpx_section(hwpx_para("가" * 200) + hwpx_para("다음"))})
+    result = extract.extract("long.hwpx", data)
+    assert result.text == "가" * 50 and result.truncated
+
+
 def test_hwpx_reads_only_up_to_the_byte_limit(monkeypatch):
     monkeypatch.setattr(extract, "MAX_HWPX_READ_BYTES", 5000)
     paragraphs = "".join(hwpx_para(f"{i}번 문단") + LINESEG for i in range(300))
@@ -671,3 +999,41 @@ def test_hwp_builder_compresses_like_hwp():
     with olefile.OleFileIO(io.BytesIO(data)) as ole:
         raw = zlib.decompressobj(-15).decompress(ole.openstream("BodyText/Section0").read())
     assert "압축".encode("utf-16-le") in raw
+
+
+def test_zip_directory_size_is_read_like_zipfile():
+    docx = make_docx(lambda d: d.add_paragraph("짧은 문단"))
+    with_comment = io.BytesIO()
+    with zipfile.ZipFile(with_comment, "w") as archive:
+        archive.writestr("a.txt", "가")
+        archive.comment = b"comment PK"
+    for data in (docx, with_comment.getvalue()):
+        assert extract.zip_directory_size(data) == zipfile._EndRecData(io.BytesIO(data))[zipfile._ECD_SIZE]
+    assert extract.zip_directory_size(b"not a zip") is None
+
+
+def test_zip_with_a_huge_directory_is_refused_before_opening(monkeypatch):
+    """빈 항목 수만 개를 담은 zip 은 zipfile 이 열기만 해도 항목마다 ZipInfo 를 만든다. 끝 레코드로 크기를 보고 열지 않는다.
+
+    항목이 65535 개를 넘으면 ZIP64 끝 레코드에 크기가 적힌다 — 그 값도 같은 방법으로 읽는다.
+    """
+    import tracemalloc
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("word/document.xml", "<w/>")
+        for i in range(70_000):
+            archive.writestr(str(i), b"")
+    data = out.getvalue()
+    size = extract.zip_directory_size(data)
+    assert size == zipfile._EndRecData(io.BytesIO(data))[zipfile._ECD_SIZE] and size > extract.MAX_ZIP_DIRECTORY_BYTES
+    tracemalloc.start()
+    try:
+        assert error_code("many.docx", data) == BROKEN_FILE
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 1024 * 1024, peak
+    monkeypatch.setattr(extract, "MAX_ZIP_DIRECTORY_BYTES", size)
+    monkeypatch.setattr(extract, "MAX_ZIP_ENTRIES", 10**6)
+    assert error_code("many.docx", data) == BROKEN_FILE, "열리지만 docx 가 아니다"

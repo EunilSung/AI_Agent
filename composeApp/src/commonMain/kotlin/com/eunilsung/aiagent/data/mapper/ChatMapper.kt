@@ -38,10 +38,12 @@ class ChatMapper {
      * 대화 기록 한 줄. 메시지 보내기 카드는 글이 아니라 [SendActionDto] 로 보낸다 — RAG 서버가 도구 호출과 그 결과로 LLM 에 넣는다.
      * "…에게 보냈습니다" 같은 글로 넣으면 LLM 이 다음 보내기 요청에서 도구를 부르지 않고 그 글만 흉내 내 아무것도 보내지 않는다.
      * 받는 사람은 실제로 보낸 사람이 있으면 그 이름, 아니면 사용자가 말한 그대로다.
+     * Talk 파일 요약의 질문·답변은 [ChatMessageDto.summary] 로 표시해, RAG 서버가 지시가 아닌 자료로 감싸게 한다.
      */
     fun toDto(message: ChatMessage): ChatMessageDto {
         val role = if (message.role == ChatRole.User) ApiRole.USER else ApiRole.ASSISTANT
-        val request = message.sendRequest ?: return ChatMessageDto(role = role, content = message.content)
+        val request = message.sendRequest
+            ?: return ChatMessageDto(role = role, content = message.content, summary = message.summary)
         return ChatMessageDto(
             role = role,
             content = "",
@@ -81,7 +83,8 @@ class ChatMapper {
     /**
      * 스트림 중 `error` 이벤트. 이유는 code 로만 가린다 — 요약하다 실패한 이유([SummaryErrorCode])면 그 이유,
      * 브릿지가 RAG 서버와의 연결이 끊긴 것을 알린 것([StreamErrorCode.INTERRUPTED])이면 `done` 없이 끝난 스트림과 같은
-     * 닿지 못함, 그 밖은 서버 실패다. message 는 기록용이라 [AnswerFailure.Server.reason] 에 로그용으로만 담는다.
+     * 닿지 못함, 브릿지 공통 거절([bridgeRefusalOf] — 동시 실행 상한 등)이면 그 이유, 그 밖은 서버 실패다.
+     * message 는 기록용이라 [AnswerFailure.Server.reason] 에 로그용으로만 담는다.
      */
     fun streamFailure(data: String): AnswerFailure {
         val event = runCatching { json.decodeFromString(StreamErrorEvent.serializer(), data) }.getOrDefault(StreamErrorEvent())
@@ -91,24 +94,28 @@ class ChatMapper {
             SummaryErrorCode.ENCRYPTED_FILE -> AnswerFailure.EncryptedFile
             SummaryErrorCode.BROKEN_FILE -> AnswerFailure.BrokenFile
             StreamErrorCode.INTERRUPTED -> AnswerFailure.Unreachable
-            else -> AnswerFailure.Server(event.message)
+            else -> bridgeRefusalOf(event.code)?.let { AnswerFailure.Refused(it) } ?: AnswerFailure.Server(event.message)
         }
     }
 
     /**
      * 브릿지가 SSE 를 열지 않고 거절한 이유. 다시 보내도 같은 답인 거절과 다시 보내면 될 수 있는 닿지 못함을 나눈다.
      *
+     * 브릿지 공통 거절(접속 키·허용 사용자·본문 크기·동시 실행 — [bridgeRefusalOf])이 먼저다.
      * 파일 이유는 상태가 아니라 [code] 로 가린다 — 브릿지는 404 를 [ErrorCode.FILE_NOT_FOUND], 413 을
      * [ErrorCode.FILE_TOO_LARGE] 와 함께 준다. 코드 없는 404(요약 경로가 없는 예전 브릿지)나 413(중간 프록시가 큰 대화
      * 요청을 막음)은 파일 탓이 아니므로 서버 실패다.
      */
-    fun rejection(status: Int, code: String): AnswerFailure = when {
-        status == 401 -> AnswerFailure.SessionExpired
-        status == 429 -> AnswerFailure.RateLimited
-        code == ErrorCode.FILE_NOT_FOUND -> AnswerFailure.FileNotFound
-        code == ErrorCode.FILE_TOO_LARGE -> AnswerFailure.FileTooLarge
-        status == 503 -> AnswerFailure.Unreachable
-        else -> AnswerFailure.Server(code)
+    fun rejection(status: Int, code: String): AnswerFailure {
+        bridgeRefusalOf(code)?.let { return AnswerFailure.Refused(it) }
+        return when {
+            status == 401 -> AnswerFailure.SessionExpired
+            status == 429 -> AnswerFailure.RateLimited
+            code == ErrorCode.FILE_NOT_FOUND -> AnswerFailure.FileNotFound
+            code == ErrorCode.FILE_TOO_LARGE -> AnswerFailure.FileTooLarge
+            status == 503 -> AnswerFailure.Unreachable
+            else -> AnswerFailure.Server(code)
+        }
     }
 
     fun toDomain(row: ConversationRow): Conversation = Conversation(
@@ -128,6 +135,7 @@ class ChatMapper {
         status = MessageStatus.entries.firstOrNull { it.name == row.status } ?: MessageStatus.Done,
         createdAt = row.created_at,
         sendRequest = row.send_request_json?.let(::decodeSendRequest),
+        summary = row.summary != 0L,
     )
 
     fun encodeSources(sources: List<Source>): String =

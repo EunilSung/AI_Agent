@@ -119,7 +119,7 @@ class ConversationRepositoryImpl(
                 queries.upsertMessage(
                     message.id, message.conversationId, message.role.name, message.content,
                     mapper.encodeSources(message.sources), message.searchQuery, message.status.name, message.createdAt,
-                    mapper.encodeSendRequest(message.sendRequest),
+                    mapper.encodeSendRequest(message.sendRequest), if (message.summary) 1L else 0L,
                 )
                 save(owner, updated)
             }

@@ -1,8 +1,11 @@
 package com.eunilsung.aiagent.data.remote
 
+import com.eunilsung.aiagent.Config
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
 import com.eunilsung.aiagent.shared.api.ApiError
+import com.eunilsung.aiagent.shared.api.BRIDGE_KEY_HEADER
 import com.eunilsung.aiagent.shared.api.ChatRequest
+import com.eunilsung.aiagent.shared.api.ErrorCode
 import com.eunilsung.aiagent.shared.api.HealthResponse
 import com.eunilsung.aiagent.shared.api.LoginRequest
 import com.eunilsung.aiagent.shared.api.LoginResponse
@@ -45,19 +48,40 @@ sealed interface ServerResult<out T> {
     data object Unreachable : ServerResult<Nothing>
 }
 
-/** SSE 대화·요약을 브릿지가 열지 않고 거절했다. [code] 는 [com.eunilsung.aiagent.shared.api.ErrorCode] 중 하나다. */
+/**
+ * 앱 안에서만 쓰는 거절 code — 브릿지가 보내는 값이 아니다. 이 주소의 호스트에는 접속 키를 싣지 않았는데
+ * 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절했을 때 그 code 대신 쓴다. 키가 틀린 것이 아니라 주소가 빌드 때 정한
+ * 브릿지가 아니라는 뜻이라, 화면에 다른 안내를 띄운다.
+ */
+internal const val ACCESS_KEY_NOT_SENT = "app_access_key_not_sent"
+
+/** SSE 대화·요약을 브릿지가 열지 않고 거절했다. [code] 는 [ErrorCode] 중 하나거나 [ACCESS_KEY_NOT_SENT] 다. */
 class ChatRejectedException(val status: Int, val code: String) : Exception("chat rejected: $status $code")
 
-/** 브릿지 REST·SSE 클라이언트. 주소는 부를 때마다 [urlStore] 에서 읽어, 설정에서 바꾸면 바로 반영된다. */
+/**
+ * 브릿지 REST·SSE 클라이언트. 주소는 부를 때마다 [urlStore] 에서 읽어, 설정에서 바꾸면 바로 반영된다.
+ *
+ * 모든 요청(로그인·로그아웃·연결 확인 포함)에 접속 키 헤더([BRIDGE_KEY_HEADER])를 싣는다. 브릿지는 키가 맞을 때만 받는다 —
+ * 공개된 테스트 계정만 아는 바깥 사람은 브릿지에 들어오지 못한다. 키는 빌드 때 `local.properties` 의
+ * `bridge.accessKey`(또는 환경변수 `AI_AGENT_BRIDGE_KEY`)에서 들어온다([Config.Bridge.ACCESS_KEY]). 비어 있으면 헤더를
+ * 싣지 않고, 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절한다.
+ *
+ * 키는 요청 주소의 호스트가 [accessKeyHosts](빌드 기본 주소의 호스트와 로컬 주소)일 때만 싣는다. 키는 모든 설치본이 함께 쓰는
+ * 값이라, 설정에서 주소를 다른 호스트로 바꾸게 속이면 그 호스트가 브릿지 전체의 키를 받게 된다. 그런 주소에서 브릿지가 키 없음으로
+ * 거절하면 [ACCESS_KEY_NOT_SENT] 로 알린다.
+ */
 class BridgeClient(
     private val http: HttpClient,
     private val urlStore: BridgeUrlStore,
+    private val accessKey: String = Config.Bridge.ACCESS_KEY,
+    private val accessKeyHosts: Set<String> = Config.Bridge.ACCESS_KEY_HOSTS,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val baseUrl: String get() = urlStore.url.value
 
     suspend fun login(id: String, password: String): ServerResult<LoginResponse> = request(LoginResponse.serializer()) {
         http.post("$baseUrl/v1/auth/login") {
+            withAccessKey()
             jsonBody(json.encodeToString(LoginRequest.serializer(), LoginRequest(id, password)))
         }
     }
@@ -69,7 +93,7 @@ class BridgeClient(
     }
 
     suspend fun health(): ServerResult<HealthResponse> = request(HealthResponse.serializer()) {
-        http.get("$baseUrl/v1/health")
+        http.get("$baseUrl/v1/health") { withAccessKey() }
     }
 
     /**
@@ -141,10 +165,25 @@ class BridgeClient(
         return result ?: ServerResult.Unreachable
     }
 
-    private suspend fun HttpResponse.errorCode(): String =
-        runCatching { json.decodeFromString(ApiError.serializer(), bodyAsText()).code }.getOrDefault("")
+    /** 거절 응답의 code. 키를 싣지 않은 호스트가 키 없음으로 거절했으면 [ACCESS_KEY_NOT_SENT] 로 바꾼다. */
+    private suspend fun HttpResponse.errorCode(): String {
+        val code = runCatching { json.decodeFromString(ApiError.serializer(), bodyAsText()).code }.getOrDefault("")
+        val withheld = accessKey.isNotEmpty() && !carriesAccessKey(call.request.url.host)
+        return if (code == ErrorCode.CLIENT_KEY_INVALID && withheld) ACCESS_KEY_NOT_SENT else code
+    }
 
-    private fun HttpRequestBuilder.bearer(token: String) = header(HttpHeaders.Authorization, "Bearer $token")
+    /** 로그인한 요청 — 접속 키와 Talk 토큰을 함께 싣는다. */
+    private fun HttpRequestBuilder.bearer(token: String) {
+        withAccessKey()
+        header(HttpHeaders.Authorization, "Bearer $token")
+    }
+
+    /** 접속 키를 싣는다. 키가 비었거나 요청 주소의 호스트가 [accessKeyHosts] 밖이면 싣지 않는다. */
+    private fun HttpRequestBuilder.withAccessKey() {
+        if (accessKey.isNotEmpty() && carriesAccessKey(url.host)) header(BRIDGE_KEY_HEADER, accessKey)
+    }
+
+    private fun carriesAccessKey(host: String): Boolean = host.lowercase() in accessKeyHosts
 
     private fun HttpRequestBuilder.jsonBody(body: String) {
         contentType(ContentType.Application.Json)

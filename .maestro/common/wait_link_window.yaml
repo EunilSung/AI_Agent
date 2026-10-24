@@ -1,0 +1,11 @@
+appId: com.eunilsung.aiagent
+name: 다음 링크를 받을 때까지 기다린다
+# 앱은 앞 링크에서 3초 안에 다시 온 링크를 버린다(HandleSummaryLinkUseCase.REPEAT_WINDOW). Maestro 에는 잠깐 쉬는 명령이 없어,
+# 나타나지 않는 요소를 4초 동안 기다리고 그 실패는 넘긴다(optional).
+---
+- extendedWaitUntil:
+    visible:
+      id: never_shown_link_window
+    timeout: 4000
+    optional: true
+    label: 링크를 되풀이해 여는 것을 막는 3초를 기다린다

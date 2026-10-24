@@ -80,6 +80,7 @@ import com.eunilsung.aiagent.ui.uikit.toast.LocalToastManager
 import com.eunilsung.aiagent.ui.uikit.topbar.NavIconButton
 import com.eunilsung.aiagent.ui.uikit.topbar.TopBarV1
 import com.eunilsung.aiagent.ui.util.chatDateHeaderText
+import com.eunilsung.aiagent.ui.util.text
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.getString
@@ -103,7 +104,7 @@ class ChatScreen(val conversationId: String) : Screen {
             viewModel.events.collect { event ->
                 val message = when (event) {
                     ChatEvent.SessionExpired -> getString(Res.string.toast_session_expired)
-                    ChatEvent.SendFailed -> getString(Res.string.send_failed)
+                    is ChatEvent.SendFailed -> getString(event.refusal?.text() ?: Res.string.send_failed)
                     is ChatEvent.AnswerFailed -> getString(event.failure.toastText())
                     is ChatEvent.SummaryRequested -> {
                         viewModel.onAction(
@@ -135,6 +136,7 @@ internal fun AnswerFailure.toastText(): StringResource = when (this) {
     AnswerFailure.FileTooLarge -> Res.string.toast_summary_too_large
     AnswerFailure.SessionExpired -> Res.string.toast_session_expired
     AnswerFailure.Unreachable -> Res.string.toast_chat_unreachable
+    is AnswerFailure.Refused -> refusal.text()
 }
 
 /**

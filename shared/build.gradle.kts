@@ -22,7 +22,13 @@ if (!bridgeOnly) apply(plugin = libs.plugins.androidLibrary.get().pluginId)
  * 조용히 어긋날 수 없다. 브릿지가 JVM 이라 jvm 타깃이 함께 필요하다.
  */
 kotlin {
-    jvm()
+    /**
+     * 브릿지는 JDK 17 로 돈다. 대상 버전을 적지 않으면 Gradle 데몬의 JDK(예: `gradle-daemon-jvm.properties` 의 21)를 따라
+     * 클래스가 만들어져, 브릿지 테스트·실행이 `UnsupportedClassVersionError` 로 실패한다.
+     */
+    jvm {
+        compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
+    }
     if (!bridgeOnly) {
         androidTarget {
             compilerOptions { jvmTarget.set(JvmTarget.JVM_11) }

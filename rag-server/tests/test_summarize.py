@@ -412,3 +412,64 @@ def test_read_body_limit():
 
     assert asyncio.run(summarize.read_body(chunks(), limit=100)) == b"x" * 50
     assert asyncio.run(summarize.read_body(chunks(), limit=30)) is None
+
+
+# ---------- 글 뽑기 동시 실행 ----------
+
+def test_extractions_run_at_most_max_at_once(monkeypatch):
+    monkeypatch.setattr(summarize, "MAX_CONCURRENT_EXTRACTS", 2)
+    lock = threading.Lock()
+    running = peak = 0
+    release = threading.Event()
+
+    def work(number):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        release.wait(5)
+        with lock:
+            running -= 1
+        return number
+
+    async def main():
+        tasks = [asyncio.ensure_future(summarize.run_extraction(work, n)) for n in range(5)]
+        await asyncio.sleep(0.3)
+        assert peak == 2
+        release.set()
+        return await asyncio.gather(*tasks)
+
+    assert asyncio.run(main()) == [0, 1, 2, 3, 4]
+    assert peak == 2
+
+
+def test_cancelled_extraction_keeps_its_slot_until_the_thread_ends(monkeypatch):
+    """앱이 끊어 기다리던 쪽이 취소돼도 스레드는 끝까지 돈다. 그동안 자리를 돌려주면 상한을 넘겨 돌게 된다."""
+    monkeypatch.setattr(summarize, "MAX_CONCURRENT_EXTRACTS", 1)
+    first_running = threading.Event()
+    first_release = threading.Event()
+    started: list[str] = []
+
+    def first():
+        started.append("first")
+        first_running.set()
+        first_release.wait(5)
+        started.append("first done")
+
+    def second():
+        started.append("second")
+
+    async def main():
+        task = asyncio.ensure_future(summarize.run_extraction(first))
+        await asyncio.to_thread(first_running.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        follower = asyncio.ensure_future(summarize.run_extraction(second))
+        await asyncio.sleep(0.2)
+        assert started == ["first"], "취소된 글 뽑기가 아직 도는데 다음 것이 시작했다"
+        first_release.set()
+        await asyncio.wait_for(follower, 5)
+
+    asyncio.run(main())
+    assert started == ["first", "first done", "second"]

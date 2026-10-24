@@ -39,6 +39,9 @@ Talk 와 같은 구조(Clean Architecture + MVI, Koin, Voyager, Ktor, SQLDelight
 - **로그인한 사람으로 보낸다.** 브릿지는 그 사람의 Talk 토큰으로 Talk 의 기존 API(사람 목록 → 1:1 방 열기 → 대화 보내기)를 부른다.
   Talk 에서는 본인이 보낸 메시지로 보이고, 누구에게 보낼 수 있는지도 Talk 서버의 규칙을 따른다.
 - **두 번 가지 않는다.** 앱 메시지 id 를 Talk 대화 id 로 쓴다. 응답을 못 받아 다시 보내도 Talk 는 한 번만 받는다.
+- **문서 속 지시를 따르지 않는다.** 참고 문서와 파일 요약은 '자료' 틀로 감싸 LLM 에 넣고, 시스템 프롬프트가 그 안의 지시를 따르지 말라고 한다.
+  RAG 서버는 LLM 이 정한 받는 사람의 낱말이 모두 사용자의 이번 말에 있을 때만 보내기 카드를 내고, 아니면 받는 사람을 적어 달라고 답한다.
+  브릿지는 Talk 의 AI 계정·자기 자신에게 보내기를 받지 않는다.
 
 ### Talk 문서 요약
 
@@ -48,9 +51,10 @@ Talk 의 파일 대화를 길게 눌러 "AI 요약"을 고르면 Talk 가 이 �
 aiagent://summarize?fileId=<Talk 파일 id>&fileName=<파일 이름>&userId=<Talk 아이디>&userName=<이름>   (값은 모두 퍼센트 인코딩)
 ```
 
-- **계정을 맞춘다.** 이 앱에 같은 아이디로 로그인해 있으면 바로 새 대화를 만들어 요약한다. 로그인 전이거나 다른 계정이면
-  (로그인해 있던 계정은 로그아웃하고) 로그인 칸의 아이디를 요청한 계정으로 바꾸고 안내 팝업을 띄운다. 그 계정으로 로그인하면
-  요약이 이어지고, 다른 계정으로 로그인하면 요약을 취소했다고 알린다.
+- **계정을 맞춘다.** 이 앱에 같은 아이디로 로그인해 있으면 바로 새 대화를 만들어 요약한다. 다른 계정이면 먼저 "지금 계정에서
+  로그아웃하고 <아이디> 로 로그인할까요?" 를 묻고, [로그아웃]을 골랐을 때만 로그아웃한 뒤 로그인 칸에 그 아이디를 채운다([취소]면 그대로).
+  로그인 전이면 바로 로그인 칸에 아이디를 채운다. 그 계정으로 로그인하면 요약이 이어지고, 다른 계정으로 로그인하면 취소했다고 알린다.
+  링크는 아무 앱이나 열 수 있으므로 링크의 이름(userName)은 화면에 쓰지 않고 아이디만 보이며, 몇 초 안에 거듭 오는 링크는 버린다.
 - **파일은 볼 수 있는 사람만 받는다.** 브릿지가 로그인한 사람의 Talk 토큰으로 Talk 서버에서 파일을 받는다. Talk 서버는 그 파일이
   있는 방의 사람에게만 파일을 준다. 아무 앱이 링크를 열어도 남의 파일은 요약되지 않는다.
 - **형식**: txt·md·csv·tsv·log·json·xml·html, pdf, docx, xlsx, pptx, hwpx, hwp(5.0). 20MB 까지. 스캔한 PDF(글자 없음)·암호 걸린
@@ -74,8 +78,20 @@ aiagent://summarize?fileId=<Talk 파일 id>&fileName=<파일 이름>&userId=<Tal
 cd rag-server && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-`local.properties` 에 Android SDK 경로를 둔다. 앱의 기본 브릿지 주소를 바꾸려면 `bridge.baseUrl` 을 넣는다(비우면 에뮬레이터
-`http://10.0.2.2:8095`, 시뮬레이터 `http://localhost:8095`).
+`local.properties` 에 Android SDK 경로와 **브릿지 접속 키**를 둔다. 앱과 브릿지가 같은 파일에서 키를 읽는다.
+
+```properties
+sdk.dir=<Android SDK 경로>
+bridge.accessKey=<32자 이상 무작위 값>      # openssl rand -base64 32. 저장소에 넣지 않는다(실제 값은 ../AI_Agent_info)
+bridge.baseUrl=<앱의 기본 브릿지 주소>      # 비우면 에뮬레이터 http://10.0.2.2:8095, 시뮬레이터 http://localhost:8095
+```
+
+- 앱은 모든 브릿지 요청에 `X-Bridge-Key` 를 싣고, 브릿지는 같은 값일 때만 받는다. 키는 모든 설치본이 같은 값이고 APK·IPA 에서 꺼낼 수
+  있으니 빌드를 바깥 사람에게 주지 않는다. 새면 브릿지와 앱의 키를 함께 바꾸고 다시 빌드한다. 앱은 키를 빌드 기본 주소의 호스트와
+  로컬 주소(10.0.2.2·localhost·127.0.0.1)에만 싣는다.
+- `bridge.baseUrl` 은 https 이거나 로컬 주소여야 빌드된다. 앱의 평문 HTTP 는 로컬 주소에만 열려 있어(Android network_security_config,
+  iOS NSAllowsLocalNetworking + 앱의 주소 규칙), 같은 Wi-Fi 의 실기기가 `http://<Mac IP>:8095` 로 붙는 방식은 더 쓰지 않는다.
+  실기기는 https 터널 주소(`AI_AGENT_BRIDGE_URL=<터널 주소>` 로 빌드)를 쓴다.
 
 ## 실행
 
@@ -86,14 +102,19 @@ ollama serve
 cd rag-server && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
 curl -X POST localhost:8000/v1/ingest                      # rag-server/docs 의 .md/.txt 를 색인 (문서를 바꿀 때마다)
 cd ../Talk && ./gradlew :server:runLocal                   # Talk 로컬 서버 8090
-./gradlew :bridge:run                                      # 브릿지 8095 (Android Studio 실행 구성 "브릿지 실행")
+./gradlew :bridge:run                                      # 브릿지 127.0.0.1:8095. local.properties 의 bridge.accessKey 를 넘긴다 (실행 구성 "브릿지 실행")
 ./gradlew :composeApp:installDebug                         # Android
 open iosApp/iosApp.xcodeproj                               # iOS — Xcode 에서 시뮬레이터를 골라 실행
 ```
 
 | 설정 (환경변수) | 기본값 | 뜻 |
 |---|---|---|
-| 브릿지 `PORT` · `HOST` | `8095` · `0.0.0.0` | 같은 Wi-Fi 의 실기기가 붙게 모든 주소에서 받는다. 터널만 쓸 거면 `HOST=127.0.0.1` |
+| 브릿지 `PORT` · `HOST` | `8095` · `127.0.0.1` | 이 Mac 안에서만 받는다. 에뮬레이터(10.0.2.2)·시뮬레이터·터널(Funnel 은 127.0.0.1:8095 로 붙음)은 그대로 된다 |
+| 브릿지 `BRIDGE_ACCESS_KEY` | `local.properties` 의 `bridge.accessKey` | 없거나 32자보다 짧으면 브릿지가 뜨지 않는다. `BRIDGE_ALLOW_NO_KEY=1` 은 이 기기 안에서 프록시 없이 바로 온 요청만 받는 시험용이다 |
+| 브릿지 `ALLOWED_USER_IDS` | (비움) | 쉼표로 적은 아이디만 로그인할 수 있다. 비우면 모든 Talk 계정 |
+| 브릿지 `LOGIN_PER_IP_PER_MINUTE` · `LOGIN_GLOBAL_PER_SECOND` | `10` · `5` | 로그인 시도 한도(넘으면 429). 터널 뒤에서는 X-Forwarded-For 의 마지막 값을 주소로 본다 |
+| 브릿지 `LLM_CONCURRENCY` · `LLM_PER_USER_CONCURRENCY` | `4` · `2` | 동시에 도는 대화·요약의 무게 합(요약은 2)과 사람당 동시 개수. 넘으면 503 busy |
+| 브릿지 `PEOPLE_PER_USER_HOURLY` | `120` | 사람 찾기 한도 |
 | 브릿지 `RAG_URL` · `TALK_URL` | `http://127.0.0.1:8000` · `http://localhost:8090` | |
 | 브릿지 `CHAT_PER_USER_HOURLY` | `60` | 한 사람이 한 시간에 보낼 수 있는 질문·메시지 수 |
 | RAG `CHAT_MODEL` · `EMBED_MODEL` | `gemma4:26b` · `bge-m3` | 임베딩 모델을 바꾸면 다시 색인한다 |
@@ -102,7 +123,8 @@ open iosApp/iosApp.xcodeproj                               # iOS — Xcode 에�
 
 ## 브릿지 API
 
-모든 경로는 `/v1/health` 를 빼고 `Authorization: Bearer <Talk 토큰>` 이 필요하다. 요청·응답 모델은 `shared/` 에 있다.
+모든 경로(`/v1/health` 포함)는 접속 키 헤더 `X-Bridge-Key` 가 먼저 필요하고(없거나 틀리면 403 `client_key_invalid`), `/v1/health` 밖은
+`Authorization: Bearer <Talk 토큰>` 도 필요하다. 요청·응답 모델은 `shared/` 에 있다.
 
 | 경로 | 내용 |
 |---|---|
@@ -113,7 +135,9 @@ open iosApp/iosApp.xcodeproj                               # iOS — Xcode 에�
 | `POST /v1/talk/messages` | `{recipientId, content, requestId}` → 1:1 방을 열고(있으면 그 방) 대화를 보낸다 |
 | `GET /v1/health` | 브릿지·RAG(모델·조각 수)·Talk 연결 |
 
-거절은 요청의 `Accept`(SSE 경로는 `text/event-stream`)와 상관없이 늘 JSON `{"code": …}` 으로 온다.
+거절은 요청의 `Accept`(SSE 경로는 `text/event-stream`)와 상관없이 늘 JSON `{"code": …}` 으로 온다. 공통 거절:
+403 `client_key_invalid`·`user_not_allowed`(허용 목록 밖), 413 `payload_too_large`(본문 상한: 로그인 4KB·요약 4KB·보내기 32KB·대화 512KB),
+429 `too_many_attempts`(로그인 시도)·`rate_limited`, 503 `busy`(동시 실행 상한, `Retry-After`).
 
 SSE 이벤트(`POST /v1/chat` · `POST /v1/summarize`):
 
@@ -134,12 +158,14 @@ event: done     data: {} 또는 {"notFound":true}   ← 답변이 "문서에서 
 
 | 실행 | 내용 |
 |---|---|
-| `./gradlew :bridge:test` | 브릿지 33개 — 로그인 대행, 토큰 확인, SSE 중계, 한도, RAG 꺼짐, 사람 찾기(이름·아이디·이름(아이디)), 보내기, 로그인 없이 보내기 차단, 보내기 기록(sendAction) 중계, 요약(파일 받기·20MB 경계·Talk/RAG 끊김·파일 이름은 헤더로·로그에 이름 안 남김), SSE 를 바라는 요청의 거절도 JSON |
-| `./gradlew :composeApp:testDebugUnitTest :composeApp:iosSimulatorArm64Test` | 앱 96개 × Android(JVM)·iOS — SSE 해석, 마크다운, 대화 묶음·날짜선, 보내기 기록·못 찾음 처리, 실패 분류, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB, 요약 링크 해석·계정 확인·로그인 뒤 이어 가기, 요약 진행·실패 이유·끊긴 답변, HTTP 제한, Koin 구성 |
-| `cd rag-server && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest -q` | RAG 132개 — 형식별 글 뽑기(HWP 는 테스트가 OLE 파일을 직접 만든다), 암호·스캔·깨짐·지원 안 함, 압축 폭탄·글자 상한, 나눠 요약·진행·ping·끊김, `X-File-Name` |
-| `maestro --device <기기> test .maestro -e SUMMARY_FILE_ID=… -e SUMMARY_FILE_NAME=…` | 실화면 흐름 3개 × Android·iOS — 추천 질문에 근거 문서로 답하기 / Talk 로 메시지 보내기 / 요약 링크(같은 계정·다른 계정·엉뚱한 계정으로 로그인). 03 은 test1–test2 1:1 방에 올린 Talk 파일 id 와 URL 인코딩한 이름이 필요하다 |
+| `./gradlew :bridge:test` | 브릿지 80개 — 접속 키(모든 경로·키 강도·프록시 거친 요청), 본문 상한, 로그인 시도 한도, 동시 실행 상한, AI 계정·자기 자신에게 보내기 거절, 로그인 대행, 토큰 확인, SSE 중계, 한도, RAG 꺼짐, 사람 찾기(이름·아이디·이름(아이디)), 보내기, 로그인 없이 보내기 차단, 보내기 기록(sendAction) 중계, 요약(파일 받기·20MB 경계·Talk/RAG 끊김·파일 이름은 헤더로·로그에 이름 안 남김), SSE 를 바라는 요청의 거절도 JSON |
+| `./gradlew :composeApp:testDebugUnitTest :composeApp:iosSimulatorArm64Test` | 앱 Android(JVM) 160개 · iOS 152개 — 접속 키 싣기, 토큰 암호화 저장·평문 이전, 주소 규칙(평문은 로컬 주소만), 다른 계정 링크의 확인 대화상자, SSE 해석, 마크다운, 대화 묶음·날짜선, 보내기 기록·못 찾음 처리, 실패 분류, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB, 요약 링크 해석·계정 확인·로그인 뒤 이어 가기, 요약 진행·실패 이유·끊긴 답변, HTTP 제한, Koin 구성 |
+| `cd rag-server && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest -q` | RAG 219개 — xlsx 직접 흘려 읽기·공유 문자열 상한, 문서·요약 속 지시 무력화(틀 표시 지우기·받는 사람 확인), 형식별 글 뽑기(HWP 는 테스트가 OLE 파일을 직접 만든다), 암호·스캔·깨짐·지원 안 함, 압축 폭탄·글자 상한, 나눠 요약·진행·ping·끊김, `X-File-Name` |
+| `maestro --device <기기> test .maestro -e SUMMARY_FILE_ID=… -e SUMMARY_FILE_NAME=…` | 실화면 흐름 3개 × Android·iOS — 추천 질문에 문서로 답하기(근거 칩은 config 로 꺼짐) / Talk 로 메시지 보내기 / 요약 링크(같은 계정·다른 계정 확인 후 로그아웃·취소·엉뚱한 계정으로 로그인). 03 은 test1–test2 1:1 방에 올린 Talk 파일 id 와 URL 인코딩한 이름이 필요하다 |
 
 Android Studio 실행 구성: `테스트 (JVM)`, `테스트 (JVM + iOS 시뮬레이터)`, `브릿지 실행`.
+
+브릿지를 curl 로 부를 때는 `-H "X-Bridge-Key: <bridge.accessKey>"` 를 붙인다(없으면 403).
 
 **메시지가 Talk 에 실제로 들어갔는지**는 받는 사람으로 Talk 서버에 물어 확인한다.
 

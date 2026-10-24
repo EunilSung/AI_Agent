@@ -2,9 +2,10 @@ package com.eunilsung.aiagent.ui.main
 
 import aiagent.composeapp.generated.resources.Res
 import aiagent.composeapp.generated.resources.summary_login_message
-import aiagent.composeapp.generated.resources.summary_login_message_logged_out
 import aiagent.composeapp.generated.resources.summary_login_title
-import aiagent.composeapp.generated.resources.summary_login_title_other
+import aiagent.composeapp.generated.resources.summary_switch_confirm
+import aiagent.composeapp.generated.resources.summary_switch_message
+import aiagent.composeapp.generated.resources.summary_switch_title
 import aiagent.composeapp.generated.resources.toast_summary_cancelled
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -86,9 +87,10 @@ import kotlin.math.roundToInt
  * 앱 첫 화면. 구조는 Talk 의 MainScreen 과 같다 — 왼쪽은 하단 탭, 오른쪽은 우측 네비게이터([LocalRightNavigator])가 연
  * 대화방이다. 태블릿은 둘을 나란히 두고, 폰은 대화방을 위에 덮어 밀어서 닫는다. 로그인하지 않았으면 로그인 화면을 덮는다.
  *
- * Talk 요약 링크도 여기서 받는다. 같은 계정이면 요약 대화방을 대화 목록과 같은 방식으로 열고, 다른 계정이면
- * 로그인 칸의 아이디를 그 계정으로 바꾸고 안내를 띄운다. 로그인 화면이 이미 떠 있어도 아이디를 바꾸도록
- * 로그인 화면의 ViewModel 을 여기서 받아 넘긴다.
+ * Talk 요약 링크도 여기서 받는다. 같은 계정이면 요약 대화방을 대화 목록과 같은 방식으로 열고, 다른 계정으로
+ * 로그인해 있으면 로그아웃할지 먼저 묻는다([로그아웃]/[취소] — 취소하면 아무것도 바뀌지 않는다). 로그아웃했거나 처음부터
+ * 로그인하지 않았으면 로그인 칸의 아이디를 그 계정으로 바꾼다. 로그인 화면이 이미 떠 있어도 아이디를 바꾸도록
+ * 로그인 화면의 ViewModel 을 여기서 받아 넘긴다. 화면에는 링크의 아이디만 보이고 이름은 쓰지 않는다.
  */
 object MainScreen : Screen {
     @Composable
@@ -112,18 +114,21 @@ object MainScreen : Screen {
                                         rightNavigator.push(ChatScreen(event.conversationId))
                                     }
                                 }
+                                is MainEvent.ConfirmAccountSwitch -> dialog.confirm(
+                                    title = getString(Res.string.summary_switch_title),
+                                    message = getString(Res.string.summary_switch_message, event.currentUserId, event.requestedUserId),
+                                    confirmText = getString(Res.string.summary_switch_confirm),
+                                    onCancel = { viewModel.onAction(MainActions.OnAccountSwitchCancel) },
+                                    onConfirm = { viewModel.onAction(MainActions.OnAccountSwitchConfirm) },
+                                )
                                 is MainEvent.SummaryLoginRequired -> {
                                     loginViewModel.onAction(LoginActions.OnAccountRequested(event.userId))
-                                    dialog.alert(
-                                        title = getString(
-                                            if (event.loggedOut) Res.string.summary_login_title_other else Res.string.summary_login_title
-                                        ),
-                                        message = getString(
-                                            if (event.loggedOut) Res.string.summary_login_message_logged_out else Res.string.summary_login_message,
-                                            event.userName,
-                                            event.userId,
-                                        ),
-                                    )
+                                    if (!event.loggedOut) {
+                                        dialog.alert(
+                                            title = getString(Res.string.summary_login_title),
+                                            message = getString(Res.string.summary_login_message, event.userId),
+                                        )
+                                    }
                                 }
                                 MainEvent.SummaryCancelled -> toast.show(getString(Res.string.toast_summary_cancelled))
                             }

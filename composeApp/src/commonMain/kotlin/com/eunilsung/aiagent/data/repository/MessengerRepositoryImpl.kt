@@ -2,9 +2,11 @@ package com.eunilsung.aiagent.data.repository
 
 import com.eunilsung.aiagent.data.local.SessionStore
 import com.eunilsung.aiagent.data.mapper.ChatMapper
+import com.eunilsung.aiagent.data.mapper.bridgeRefusalOf
 import com.eunilsung.aiagent.data.remote.BridgeClient
 import com.eunilsung.aiagent.data.remote.ServerResult
 import com.eunilsung.aiagent.domain.model.Person
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.repository.MessengerRepository
 import com.eunilsung.aiagent.shared.api.SendTalkMessageRequest
 
@@ -23,8 +25,13 @@ class MessengerRepositoryImpl(
         }
     }
 
-    override suspend fun send(person: Person, content: String, requestId: String): Boolean {
-        val token = sessionStore.token ?: return false
-        return bridge.sendTalkMessage(token, SendTalkMessageRequest(person.id, content, requestId)) is ServerResult.Success
+    /** 브릿지 공통 거절(본문이 너무 큼·접속 키 등)이면 그 이유를 함께 돌려줘, 화면이 '다시 시도'가 아닌 맞는 안내를 띄우게 한다. */
+    override suspend fun send(person: Person, content: String, requestId: String): SendResult {
+        val token = sessionStore.token ?: return SendResult.Failed()
+        return when (val result = bridge.sendTalkMessage(token, SendTalkMessageRequest(person.id, content, requestId))) {
+            is ServerResult.Success -> SendResult.Sent
+            is ServerResult.Rejected -> SendResult.Failed(bridgeRefusalOf(result.code))
+            ServerResult.Unreachable -> SendResult.Failed()
+        }
     }
 }

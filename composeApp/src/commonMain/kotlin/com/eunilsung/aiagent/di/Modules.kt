@@ -19,6 +19,7 @@ import com.eunilsung.aiagent.domain.repository.MessengerRepository
 import com.eunilsung.aiagent.domain.repository.ServerSettingsRepository
 import com.eunilsung.aiagent.domain.repository.SummaryRequestRepository
 import com.eunilsung.aiagent.domain.usecase.CancelSendUseCase
+import com.eunilsung.aiagent.domain.usecase.ConfirmAccountSwitchUseCase
 import com.eunilsung.aiagent.domain.usecase.ChatUseCases
 import com.eunilsung.aiagent.domain.usecase.ConfirmSendUseCase
 import com.eunilsung.aiagent.domain.usecase.ConversationListUseCases
@@ -60,7 +61,7 @@ val appModule = module {
 
     singleOf(::SessionStore)
     singleOf(::BridgeUrlStore)
-    singleOf(::BridgeClient)
+    single { BridgeClient(get(), get()) }
     singleOf(::ChatMapper)
 
     single<AuthRepository> { AuthRepositoryImpl(get(), get()) }
@@ -86,7 +87,8 @@ val appModule = module {
     singleOf(::SetServerUrlUseCase)
     singleOf(::GetServiceStatusUseCase)
     singleOf(::ObserveSummaryLinksUseCase)
-    singleOf(::HandleSummaryLinkUseCase)
+    single { HandleSummaryLinkUseCase(get(), get(), get()) }
+    singleOf(::ConfirmAccountSwitchUseCase)
     singleOf(::ResumeSummaryAfterLoginUseCase)
     singleOf(::TakeHeldSummariesUseCase)
     singleOf(::SummarizeFileUseCase)

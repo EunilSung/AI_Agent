@@ -7,6 +7,7 @@ import com.eunilsung.aiagent.domain.model.ChatRole
 import com.eunilsung.aiagent.domain.model.Conversation
 import com.eunilsung.aiagent.domain.model.MessageStatus
 import com.eunilsung.aiagent.domain.model.SendRequest
+import com.eunilsung.aiagent.domain.model.SendResult
 import com.eunilsung.aiagent.domain.model.SendStatus
 import com.eunilsung.aiagent.domain.repository.AssistantRepository
 import com.eunilsung.aiagent.domain.repository.ConversationRepository
@@ -94,21 +95,25 @@ class SendQuestionUseCase(
  * 사용자가 확인한 Talk 메시지를 보낸다. 보내는 동안은 화면에만 [SendStatus.Sending] 으로 그리고, 결과만 저장한다.
  * Talk 의 대화 id 로 메시지 id 를 써서, 실패 뒤 다시 보내도 Talk 에는 한 번만 들어간다.
  *
- * @return 보냈으면 true.
+ * @return 보냈으면 [SendResult.Sent]. 보낼 수 없는 카드(이미 보냈거나 취소함, 고른 사람이 후보에 없음)도 [SendResult.Failed] 다.
  */
 class ConfirmSendUseCase(
     private val conversations: ConversationRepository,
     private val messenger: MessengerRepository,
 ) {
-    suspend operator fun invoke(conversationId: String, messageId: String, personId: String): Boolean {
-        val message = conversations.messages(conversationId).firstOrNull { it.id == messageId } ?: return false
-        val request = message.sendRequest ?: return false
-        if (request.status != SendStatus.Pending && request.status != SendStatus.Failed) return false
-        val person = request.candidates.firstOrNull { it.id == personId } ?: return false
+    suspend operator fun invoke(conversationId: String, messageId: String, personId: String): SendResult {
+        val message = conversations.messages(conversationId).firstOrNull { it.id == messageId } ?: return SendResult.Failed()
+        val request = message.sendRequest ?: return SendResult.Failed()
+        if (request.status != SendStatus.Pending && request.status != SendStatus.Failed) return SendResult.Failed()
+        val person = request.candidates.firstOrNull { it.id == personId } ?: return SendResult.Failed()
 
         conversations.upsertMessage(message.copy(sendRequest = request.copy(status = SendStatus.Sending)), persist = false)
         val sent = messenger.send(person, request.content, requestId = message.id)
-        val result = if (sent) request.copy(status = SendStatus.Sent, sentTo = person) else request.copy(status = SendStatus.Failed)
+        val result = if (sent == SendResult.Sent) {
+            request.copy(status = SendStatus.Sent, sentTo = person)
+        } else {
+            request.copy(status = SendStatus.Failed)
+        }
         conversations.upsertMessage(message.copy(sendRequest = result))
         return sent
     }

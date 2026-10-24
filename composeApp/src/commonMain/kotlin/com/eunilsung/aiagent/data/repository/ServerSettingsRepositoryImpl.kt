@@ -1,6 +1,7 @@
 package com.eunilsung.aiagent.data.repository
 
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
+import com.eunilsung.aiagent.data.mapper.bridgeRefusalOf
 import com.eunilsung.aiagent.data.remote.BridgeClient
 import com.eunilsung.aiagent.data.remote.ServerResult
 import com.eunilsung.aiagent.domain.model.ServiceStatus
@@ -24,6 +25,7 @@ class ServerSettingsRepositoryImpl(
             embedModel = result.value.rag?.embedModel,
             chunks = result.value.rag?.chunks,
         )
-        else -> ServiceStatus(bridge = false)
+        is ServerResult.Rejected -> ServiceStatus(bridge = false, refusal = bridgeRefusalOf(result.code))
+        ServerResult.Unreachable -> ServiceStatus(bridge = false)
     }
 }

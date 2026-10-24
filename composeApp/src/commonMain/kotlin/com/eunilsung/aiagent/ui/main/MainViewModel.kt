@@ -3,7 +3,7 @@ package com.eunilsung.aiagent.ui.main
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.eunilsung.aiagent.domain.model.SummaryLinkResult
-import com.eunilsung.aiagent.domain.model.User
+import com.eunilsung.aiagent.domain.model.SummaryRequest
 import com.eunilsung.aiagent.domain.usecase.MainUseCases
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -14,35 +14,12 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** 앱 전체 상태 — 로그인했는지. */
-data class MainUiState(
-    val me: User? = null,
-) {
-    val isLoggedIn: Boolean get() = me != null
-}
-
-/** 앱 전체가 한 번만 처리할 일. */
-sealed interface MainEvent {
-    /** 로그아웃했다. 열려 있던 대화방을 닫는다. */
-    data object LoggedOut : MainEvent
-
-    /** Talk 요약 링크로 이 대화를 연다. 대화방이 열리면 요약이 시작된다. */
-    data class OpenChat(val conversationId: String) : MainEvent
-
-    /**
-     * Talk 요약 링크가 다른 계정(또는 로그인 전)의 요청이다. 로그인 칸의 아이디를 [userId] 로 바꾸고 안내를 띄운다.
-     *
-     * @property loggedOut 다른 계정에서 로그아웃했으면 true.
-     */
-    data class SummaryLoginRequired(val userId: String, val userName: String, val loggedOut: Boolean) : MainEvent
-
-    /** 요약을 요청한 계정이 아닌 계정으로 로그인해 요약을 취소했다. */
-    data object SummaryCancelled : MainEvent
-}
-
 /**
  * 앱 전체 — 로그인 상태와 Talk 요약 링크. 링크는 들어온 차례로 하나씩 처리한다.
  * 로그인을 지켜보다가 로그인하면 기다리던 요약을 이어 간다.
+ *
+ * 다른 계정의 링크는 바로 로그아웃하지 않고 [MainEvent.ConfirmAccountSwitch] 로 묻는다. 답을 기다리는 요청은
+ * [pendingSwitch] 에 들고 있다가, [로그아웃]이면 로그아웃하고 [취소]면 버린다. 묻는 사이 새 링크를 처리하면 앞의 물음은 무효다.
  */
 class MainViewModel(private val useCases: MainUseCases) : ViewModel() {
     private val session = useCases.observeSession()
@@ -54,6 +31,9 @@ class MainViewModel(private val useCases: MainUseCases) : ViewModel() {
     private val _events = Channel<MainEvent>(Channel.BUFFERED)
     val events: Flow<MainEvent> = _events.receiveAsFlow()
 
+    /** 계정을 바꿀지 묻는 중인 요약 요청. 사용자가 답하거나 다른 링크를 처리하면 비운다. */
+    private var pendingSwitch: SummaryRequest? = null
+
     init {
         viewModelScope.launch {
             var wasLoggedIn = session.value != null
@@ -64,15 +44,33 @@ class MainViewModel(private val useCases: MainUseCases) : ViewModel() {
             }
         }
         viewModelScope.launch {
-            useCases.observeSummaryLinks().collect { link -> send(useCases.handleSummaryLink(link)) }
+            useCases.observeSummaryLinks().collect { link ->
+                val result = useCases.handleSummaryLink(link)
+                if (result != SummaryLinkResult.Ignored) pendingSwitch = null
+                send(result)
+            }
+        }
+    }
+
+    fun onAction(action: MainActions) {
+        when (action) {
+            MainActions.OnAccountSwitchConfirm -> {
+                val request = pendingSwitch ?: return
+                pendingSwitch = null
+                viewModelScope.launch { send(useCases.confirmAccountSwitch(request)) }
+            }
+            MainActions.OnAccountSwitchCancel -> pendingSwitch = null
         }
     }
 
     private suspend fun send(result: SummaryLinkResult) {
         val event = when (result) {
             is SummaryLinkResult.Open -> MainEvent.OpenChat(result.conversationId)
-            is SummaryLinkResult.LoginRequired ->
-                MainEvent.SummaryLoginRequired(result.request.userId, result.request.userName, result.loggedOut)
+            is SummaryLinkResult.SwitchAccountRequested -> {
+                pendingSwitch = result.request
+                MainEvent.ConfirmAccountSwitch(currentUserId = result.currentUserId, requestedUserId = result.request.userId)
+            }
+            is SummaryLinkResult.LoginRequired -> MainEvent.SummaryLoginRequired(result.request.userId, result.loggedOut)
             SummaryLinkResult.Cancelled -> MainEvent.SummaryCancelled
             SummaryLinkResult.Ignored -> return
         }
