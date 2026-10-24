@@ -9,6 +9,7 @@ name: test1 로 로그인
 - tapOn:
     id: login_pw
 - inputText: "1234"
+- runFlow: release_fields.yaml
 - runFlow:
     when:
       platform: Android

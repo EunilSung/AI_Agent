@@ -45,11 +45,11 @@ jobs:
           EOF
       - name: 브릿지 테스트 · 앱 테스트 · 앱 빌드
         run: ./gradlew :bridge:test :composeApp:testDebugUnitTest :composeApp:assembleDebug --continue
-      - name: 앱에 접속 키가 들어가지 않았는지 확인
+      - name: 앱에 접속 키·브릿지 주소가 들어가지 않았는지 확인
         run: |
           config=composeApp/build/generated/bridgeConfig/commonMain/kotlin/com/eunilsung/aiagent/data/remote/BridgeBuildConfig.kt
-          if ! grep -q 'BRIDGE_ACCESS_KEY: String = ""' "$config"; then
-            echo "::error::공개 CI 빌드에 접속 키가 들어갔다"
+          if ! grep -Fq 'BRIDGE_ACCESS_KEY: String = ""' "$config" || ! grep -Fq 'BRIDGE_BASE_URL: String = ""' "$config"; then
+            echo "::error::공개 CI 빌드에 접속 키나 브릿지 주소가 들어갔다"
             exit 1
           fi
       - name: 실패한 테스트 보고서

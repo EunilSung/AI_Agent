@@ -11,6 +11,9 @@ import androidx.compose.ui.Modifier
 object TestTags {
     const val LOGIN_ID = "login_id"
     const val LOGIN_PW = "login_pw"
+    const val LOGIN_ACCESS_KEY = "login_access_key"
+    const val LOGIN_SERVER = "login_server"
+    const val LOGIN_CHANGE_ACCESS_KEY = "login_change_access_key"
     const val LOGIN_SUBMIT = "login_submit"
 
     const val CONVERSATION_NEW = "conversation_new"

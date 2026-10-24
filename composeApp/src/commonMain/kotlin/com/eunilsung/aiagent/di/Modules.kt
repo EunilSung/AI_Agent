@@ -1,5 +1,6 @@
 package com.eunilsung.aiagent.di
 
+import com.eunilsung.aiagent.data.local.AccessKeyStore
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
 import com.eunilsung.aiagent.data.local.DatabaseDriverFactory
 import com.eunilsung.aiagent.data.local.SessionStore
@@ -19,15 +20,19 @@ import com.eunilsung.aiagent.domain.repository.MessengerRepository
 import com.eunilsung.aiagent.domain.repository.ServerSettingsRepository
 import com.eunilsung.aiagent.domain.repository.SummaryRequestRepository
 import com.eunilsung.aiagent.domain.usecase.CancelSendUseCase
+import com.eunilsung.aiagent.domain.usecase.ChangeServerUseCase
 import com.eunilsung.aiagent.domain.usecase.ConfirmAccountSwitchUseCase
 import com.eunilsung.aiagent.domain.usecase.ChatUseCases
 import com.eunilsung.aiagent.domain.usecase.ConfirmSendUseCase
 import com.eunilsung.aiagent.domain.usecase.ConversationListUseCases
 import com.eunilsung.aiagent.domain.usecase.CreateConversationUseCase
 import com.eunilsung.aiagent.domain.usecase.DeleteConversationUseCase
+import com.eunilsung.aiagent.domain.usecase.GetDefaultServerUrlUseCase
 import com.eunilsung.aiagent.domain.usecase.GetLastLoginIdUseCase
 import com.eunilsung.aiagent.domain.usecase.GetServiceStatusUseCase
 import com.eunilsung.aiagent.domain.usecase.HandleSummaryLinkUseCase
+import com.eunilsung.aiagent.domain.usecase.HasAccessKeyUseCase
+import com.eunilsung.aiagent.domain.usecase.IsServerChosenUseCase
 import com.eunilsung.aiagent.domain.usecase.LoginUseCase
 import com.eunilsung.aiagent.domain.usecase.LoginUseCases
 import com.eunilsung.aiagent.domain.usecase.LogoutUseCase
@@ -40,6 +45,7 @@ import com.eunilsung.aiagent.domain.usecase.ObserveSessionUseCase
 import com.eunilsung.aiagent.domain.usecase.ObserveSummaryLinksUseCase
 import com.eunilsung.aiagent.domain.usecase.ResumeSummaryAfterLoginUseCase
 import com.eunilsung.aiagent.domain.usecase.SendQuestionUseCase
+import com.eunilsung.aiagent.domain.usecase.SetAccessKeyUseCase
 import com.eunilsung.aiagent.domain.usecase.SetServerUrlUseCase
 import com.eunilsung.aiagent.domain.usecase.SettingUseCases
 import com.eunilsung.aiagent.domain.usecase.SummarizeFileUseCase
@@ -60,14 +66,15 @@ val appModule = module {
     single { AppDatabase(get<DatabaseDriverFactory>().createDriver()) }
 
     singleOf(::SessionStore)
-    singleOf(::BridgeUrlStore)
-    single { BridgeClient(get(), get()) }
+    single { BridgeUrlStore(get()) }
+    single { AccessKeyStore(get()) }
+    single { BridgeClient(get(), get(), get()) }
     singleOf(::ChatMapper)
 
     single<AuthRepository> { AuthRepositoryImpl(get(), get()) }
     single<ConversationRepository> { ConversationRepositoryImpl(get(), get(), get()) }
     single<AssistantRepository> { AssistantRepositoryImpl(get(), get(), get()) }
-    single<ServerSettingsRepository> { ServerSettingsRepositoryImpl(get(), get()) }
+    single<ServerSettingsRepository> { ServerSettingsRepositoryImpl(get(), get(), get()) }
     single<MessengerRepository> { MessengerRepositoryImpl(get(), get(), get()) }
     single<SummaryRequestRepository> { SummaryRequestRepositoryImpl() }
 
@@ -85,6 +92,11 @@ val appModule = module {
     singleOf(::CancelSendUseCase)
     singleOf(::ObserveServerUrlUseCase)
     singleOf(::SetServerUrlUseCase)
+    singleOf(::ChangeServerUseCase)
+    singleOf(::GetDefaultServerUrlUseCase)
+    singleOf(::IsServerChosenUseCase)
+    singleOf(::HasAccessKeyUseCase)
+    singleOf(::SetAccessKeyUseCase)
     singleOf(::GetServiceStatusUseCase)
     singleOf(::ObserveSummaryLinksUseCase)
     single { HandleSummaryLinkUseCase(get(), get(), get()) }

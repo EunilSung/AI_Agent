@@ -53,8 +53,11 @@ Talk 의 "AI 요약" 으로 열려 docx 를 요약한 화면(왼쪽 위 "◀ Tal
 
 ### 앱
 - Talk 와 같은 구조(Clean Architecture + MVI)와 같은 모양(색 · 상단바 · 말풍선 · 탭 · **태블릿 2단**)
-- 로그인은 Talk 계정, 토큰은 Keystore(Android) · Keychain(iOS) 키로 잠가 저장
-- **설정** — 계정 · 로그아웃(확인 후), 브릿지 주소, 연결 상태(브릿지 · Talk · 모델 · 문서 조각 수 · 접속 키) · 한국어/영어(문자열 109개, 양쪽 일치)
+- 로그인은 Talk 계정. 처음 로그인할 때 서버 주소와 따로 받은 **접속 키**를 넣는다(공개 릴리스 앱에는 키도 주소도 없다).
+  브릿지의 키가 바뀌면 로그인 화면의 [접속 키 바꾸기]로 새 키를 넣는다
+- 토큰 · 접속 키는 Keystore(Android) · Keychain(iOS) 키로 잠가 저장
+- **설정** — 계정 · 로그아웃(확인 후), 브릿지 주소(다른 서버로 바꾸면 확인 후 로그아웃), 연결 상태(브릿지 · Talk · 모델 · 문서 조각 수 · 접속 키) ·
+  한국어/영어(문자열 120개, 양쪽 일치)
 
 ---
 
@@ -97,14 +100,14 @@ composeApp/src/
 ├── commonMain/          83 Kotlin files — 화면·도메인·데이터
 │   ├── kotlin/com/eunilsung/aiagent/
 │   │   ├── ui/          login · main(탭·태블릿 2단) · conversationlist · chat(말풍선·마크다운·보내기 카드) · setting · uikit
-│   │   ├── domain/      model · repository(interface 6) · usecase(21) · util(BridgeAddress · SummaryLink)
-│   │   ├── data/        local(기기 DB · 설정 · 토큰 암호화) · remote(BridgeClient · SSE 해석) · mapper · repository(*Impl)
+│   │   ├── domain/      model · repository(interface 6) · usecase(26) · util(BridgeAddress · SummaryLink)
+│   │   ├── data/        local(기기 DB · 설정 · 토큰 · 접속 키 암호화) · remote(BridgeClient · SSE 해석) · mapper · repository(*Impl)
 │   │   └── di/          Koin 모듈
 │   ├── sqldelight/      AppDatabase.sq
 │   └── composeResources/ strings(ko·en) · drawable
 ├── androidMain/          10 Kotlin files — actual 구현 · Keystore 암호화 · 링크 진입점
 ├── iosMain/               8 Kotlin files — actual 구현 · Keychain 암호화
-├── commonTest/           25 files — JVM·iOS 양쪽에서 도는 테스트
+├── commonTest/           28 files — JVM·iOS 양쪽에서 도는 테스트
 └── androidUnitTest/ · iosTest/  9 files — 플랫폼 암호화 · HTTP 클라이언트 · 평문 허용 주소 · 옛 DB 정리
 shared/                    3 files — 앱 ↔ 브릿지 요청·응답·SSE 모델
 bridge/                   19 Kotlin files — routes · limit · http · auth · rag · talk (+ 테스트 5 files)
@@ -196,16 +199,21 @@ event: done     data: {} 또는 {"notFound":true}   ← 답변이 "문서에서 
 
 - **바깥에 여는 것은 브릿지 하나이고, 그것도 터널을 거쳐서만 엽니다.** RAG 서버 · Ollama · 브릿지(기본) · Talk 로컬 서버는 모두
   `127.0.0.1` 에서만 받습니다. RAG 서버에는 인증이 없으므로 바깥에 열지 않습니다.
-- **접속 키** — 브릿지의 모든 경로(없는 경로 포함)는 먼저 `X-Bridge-Key` 를 봅니다. SHA-256 해시를 상수 시간(constant-time)으로 비교하고, 32자보다 짧은
-  키로는 브릿지가 뜨지 않습니다. 앱은 키를 빌드 기본 주소의 호스트와 로컬 주소(10.0.2.2 · localhost · 127.0.0.1)에만 싣습니다.
-- **키는 앱 안에 들어갑니다.** 모든 설치본이 같은 키를 갖고 APK · IPA 에서 꺼낼 수 있으므로, 빌드를 바깥 사람에게 주지 않습니다.
-  그래서 공개 릴리스에도 앱을 올리지 않습니다. 키가 새면 브릿지와 앱의 키를 함께 바꾸고 다시 빌드합니다.
+- **접속 키** — 브릿지의 모든 경로(없는 경로 포함)는 먼저 `X-Bridge-Key` 를 봅니다. SHA-256 해시를 상수 시간(constant-time)으로 비교하고,
+  공백 없는 영문 · 숫자 · 기호 32~256자가 아닌 키로는 브릿지가 뜨지 않습니다(앱이 넣을 수 있는 키와 같습니다).
+- **키는 앱에 넣지 않습니다.** 공개 릴리스 앱은 키도 서버 주소도 없이 빌드하고, 쓰는 사람이 처음 로그인할 때 서버 주소와 따로 받은 키를
+  넣습니다. 주소를 넣기 전에는 키도 비밀번호도 보내지 않습니다 — 빌드 기본 주소는 에뮬레이터용 평문 주소라 실기기에서는 같은 망의
+  아무 기기에나 닿을 수 있습니다. 넣은 키는 그때의 서버 주소 출처(스킴 · 호스트 · 포트)에 묶어 잠가 저장하고 그 출처로만 싣습니다 —
+  주소만 바꾸게 속여 키를 다른 서버로 빼 가지 못합니다. 리다이렉트는 따라가지 않습니다(따라가면 키 헤더가 다른 호스트로 옮겨 갑니다).
+  로그인한 채로 서버를 바꾸면 먼저 로그아웃해 Talk 토큰도 새 서버로 가지 않습니다.
+  키를 `local.properties` 에 넣어 직접 만든 개발용 빌드는 빌드 기본 주소의 호스트와 로컬 주소(10.0.2.2 · localhost · 127.0.0.1)에만 키를 싣고,
+  그 빌드는 바깥 사람에게 주지 않습니다(키를 꺼낼 수 있습니다). 키가 새면 브릿지의 `BRIDGE_ACCESS_KEY` 를 바꾸고 새 키를 다시 나눕니다.
 - **상한** — 경로별 본문 크기(로그인 4KB · 요약 4KB · 보내기 32KB · 대화 512KB), 로그인 시도(주소별 · 전체), LLM 동시 실행,
   사람당 시간당 횟수, 요청 받기 30초, 허용 계정 목록(`ALLOWED_USER_IDS`).
 - **평문은 로컬에서만** — 앱은 http 를 에뮬레이터 · 이 기기 주소(10.0.2.2 · localhost · 127.0.0.1)에만 씁니다. Android 는 `network_security_config` 로
   OS 도 막고, iOS 는 `NSAllowsLocalNetworking` 이 같은 망 이름의 평문을 열어 두므로 앱의 주소 규칙(`BridgeAddress`)이 막습니다.
   로컬이 아닌 http 주소로는 빌드되지 않습니다. 실기기는 https 터널 주소를 씁니다.
-- **기기 저장** — 토큰 · 아이디 · 이름은 잠가 저장하고(`allowBackup=false`), AI 대화 기록은 기기 DB 에 평문으로 남습니다.
+- **기기 저장** — 토큰 · 아이디 · 이름 · 접속 키는 잠가 저장하고(`allowBackup=false`), AI 대화 기록은 기기 DB 에 평문으로 남습니다.
 - **로그** — 브릿지는 파일 이름과 내용을 로그에 남기지 않고, 파일 이름은 RAG 에 URL 대신 헤더로 넘깁니다.
 
 ---
@@ -213,14 +221,15 @@ event: done     data: {} 또는 {"notFound":true}   ← 답변이 "문서에서 
 ## 외부 접속
 
 바깥(회사 밖 · 모바일 데이터)에서 쓰려면 **브릿지 하나만** 터널로 엽니다. RAG 서버 · Ollama · Talk 로컬 서버는 열지 않습니다.
-바깥에서 막는 것은 접속 키입니다. 다만 테스트 계정 비밀번호(1234)는 공개돼 있고 키는 앱에서 꺼낼 수 있으니, 열 때는
+바깥에서 막는 것은 접속 키입니다. 다만 테스트 계정 비밀번호(1234)는 공개돼 있고 키는 쓰는 사람 모두가 알게 되니, 열 때는
 `ALLOWED_USER_IDS` 로 로그인할 아이디를 줄이고, Talk 로컬 서버는 **띄울 때마다** `SEED_PASSWORD` 를 환경변수로 주어 공개 비밀번호를 쓰지 않게 합니다.
 빼고 다시 띄우면(Talk 테스트가 대신 띄운 로컬 서버도 같습니다) 시연용 계정이 공개 비밀번호로 돌아갑니다. 값은 명령줄에 그대로 쓰지 말고
 (셸 기록에 남습니다) `read -rs SEED_PASSWORD && export SEED_PASSWORD` 처럼 넘깁니다.
 
-앱은 빌드 기본 주소의 호스트와 로컬 주소에만 키를 싣습니다. 그래서 터널 주소는 로그인 · 설정 화면에서 바꾸지 말고 `local.properties` 의
-`bridge.baseUrl`(또는 환경변수 `AI_AGENT_BRIDGE_URL`)에 넣어 **앱을 다시 빌드**합니다(실행 중에 바꾼 다른 호스트로는 키를 보내지 않아 403 이 납니다).
-앱에서 주소를 저장한 적이 있으면 그 주소가 빌드 기본값보다 먼저이므로 설정의 [기본값]으로 되돌립니다. iOS 는 Xcode 가 빌드하므로 `local.properties` 를 씁니다.
+공개 릴리스 앱은 처음 켜면 로그인 화면 맨 위에 서버 주소 칸이 열립니다. 쓰는 사람은 터널 주소와 그 서버의 접속 키를 넣어 로그인합니다
+(뒤에 바꿀 때는 로그인 화면의 "서버: …" 줄이나 설정 화면에서). 키는 넣을 때의 주소 출처에 묶이므로 주소를 바꾸면 그 서버의 키를 다시
+넣습니다. 브릿지의 키를 바꿨으면 쓰는 사람은 로그인 화면의 [접속 키 바꾸기]로 새 키를 넣습니다. 개발용 빌드는 `local.properties` 의 `bridge.baseUrl`(또는 환경변수 `AI_AGENT_BRIDGE_URL`)을
+기본 주소로 넣어 빌드할 수도 있습니다(iOS 는 Xcode 가 빌드하므로 `local.properties` 를 씁니다).
 
 **임시 주소로 확인 (Cloudflare Quick Tunnel)** — 계정 · 도메인 없이 됩니다. 실행할 때마다 주소가 바뀌고 누구나 닿으므로 짧게 쓰고 닫습니다.
 Cloudflare 공식 문서상 임시 터널은 **SSE(답변 스트리밍)를 지원하지 않고** 동시 요청이 200개로 제한되며 가용성 보장이 없습니다.
@@ -269,11 +278,18 @@ Cloudflare Tunnel 은 TLS 를 Cloudflare 에서 풀므로 질문 · 답변 · �
 
 ## CI · 릴리스
 
-GitHub Actions(`.github/workflows`)가 테스트와 릴리스를 맡습니다. 비밀값은 하나도 쓰지 않습니다.
+GitHub Actions(`.github/workflows`)가 테스트와 릴리스를 맡습니다. CI 는 비밀값을 쓰지 않고, 릴리스는 `release` 환경의 APK 서명 키만 씁니다.
+
+**릴리스 서명 키** — Settings → Environments 에서 `release` 를 만들고 Deployment branches and tags 를 `v*` 태그만 허용하게 묶은 뒤,
+그 환경의 비밀값으로 `ANDROID_KEYSTORE_BASE64`(`base64 -i <키스토어 파일>`) · `ANDROID_KEYSTORE_PASSWORD` · `ANDROID_KEY_ALIAS` ·
+`ANDROID_KEY_PASSWORD` 를 넣습니다. 키스토어 원본은 저장소 밖에 둡니다. 키가 없으면 릴리스가 멈춥니다(디버그 APK 는 debuggable 이라 올리지 않습니다).
+태그 규칙만으로는 쓰기 권한이 있는 사람을 막지 못합니다 — 그 사람이 워크플로를 고친 커밋에 `v*` 태그를 달면 그 워크플로가 서명 키를 받습니다.
+그래서 Settings → Rules → Rulesets 의 태그 규칙으로 `v*` 태그를 만들고 바꾸고 지우는 일을 관리자만 하게 막고, 함께 쓰는 사람이 있으면
+`release` 환경에 Required reviewers 도 둡니다.
 
 | 워크플로 | 언제 | 하는 일 |
 |---|---|---|
-| `CI` | main 에 올린 커밋 · PR | 브릿지 테스트 · 앱 테스트 · 앱 빌드(앱에 접속 키가 들어가지 않았는지 확인) · RAG pytest(Ubuntu), iOS 시뮬레이터 테스트(macOS) |
+| `CI` | main 에 올린 커밋 · PR | 브릿지 테스트 · 앱 테스트 · 앱 빌드(앱에 접속 키 · 주소가 들어가지 않았는지 확인) · RAG pytest(Ubuntu), iOS 시뮬레이터 테스트(macOS) |
 | `Release` | `v*` 태그 | 태그가 main 의 커밋이고 앱 `versionName` 과 같은지 확인 → `CI` → 릴리스 파일 → GitHub 릴리스 |
 
 ```bash
@@ -283,11 +299,13 @@ git tag v<versionName> && git push origin v<versionName>
 
 | 릴리스 파일 | 내용 |
 |---|---|
-| `ai-agent-bridge-<버전>.zip` | 브릿지 실행본(JDK 17). 풀고 `BRIDGE_ACCESS_KEY` 를 환경변수로 준 뒤 `bridge/bin/bridge` 로 띄운다. 키 없이는 뜨지 않는다 |
+| `AI_Agent-<버전>.apk` | Android 앱(`release` 환경의 키로 서명, 서명 · debuggable 아님을 확인). 접속 키 · 서버 주소 없이 빌드해 처음 로그인할 때 넣는다 |
+| `ai-agent-bridge-<버전>.zip` | 브릿지 실행본(JDK 17). 풀고 `BRIDGE_ACCESS_KEY`(공백 없는 영문 · 숫자 · 기호 32~256자)를 환경변수로 준 뒤 `bridge/bin/bridge` 로 띄운다. 키 없이는 뜨지 않는다 |
 | `ai-agent-rag-server-<버전>.zip` | RAG 서버 소스와 샘플 문서 |
 | `SHA256SUMS.txt` | 위 파일들의 SHA-256 |
 
-- **앱(APK · IPA)은 릴리스하지 않습니다.** 접속 키가 앱 안에 들어가 꺼낼 수 있으므로, 키를 가진 사람이 [빌드 & 실행](#빌드--실행)대로 직접 빌드합니다.
+- **릴리스 APK 에는 접속 키도 서버 주소도 없습니다.** 빌드 단계가 생성 파일을 확인해 들어갔으면 멈춥니다. iOS 는 서명할 Apple 팀이 정해지지 않아
+  릴리스 파일이 없습니다(소스에서 Xcode 로 빌드).
 - **자동 배포는 없습니다.** 브릿지 · RAG · Ollama 는 회사 PC 에서 돕니다. 그 PC 를 GitHub 의 self-hosted 러너로 붙이면 공개 저장소의 PR 코드가
   그 PC 에서 돌 수 있어 붙이지 않았습니다.
 - 공개 저장소라 로그와 아티팩트는 누구나 봅니다. 액션은 커밋 SHA 로 고정했고, 릴리스 작업만 `contents: write` 를 받습니다.
@@ -296,7 +314,7 @@ git tag v<versionName> && git push origin v<versionName>
 
 ## 테스트
 
-**브릿지 80개 + 앱 168개(공통 144 · Android 16 · iOS 8 — JVM 에서 160개, iOS 시뮬레이터에서 152개가 돈다) + RAG 219개, 그리고 Android · iOS 실화면 흐름 3개.**
+**브릿지 82개 + 앱 212개(공통 186 · Android 17 · iOS 9 — JVM 에서 203개, iOS 시뮬레이터에서 195개가 돈다) + RAG 219개, 그리고 Android · iOS 실화면 흐름 3개.**
 
 ```bash
 ./gradlew :bridge:test                                               # 브릿지 (Talk·RAG 는 MockEngine 대역)
@@ -305,10 +323,14 @@ git tag v<versionName> && git push origin v<versionName>
 maestro --device <기기> test .maestro -e SUMMARY_FILE_ID=<id> -e SUMMARY_FILE_NAME=<URL 인코딩한 이름>   # Ollama · RAG · Talk · 브릿지가 떠 있어야 한다
 ```
 
+키 · 주소 없이 만든 빌드(릴리스 APK)에 돌릴 때는 환경변수 `MAESTRO_BRIDGE_URL` · `MAESTRO_ACCESS_KEY` 를 줍니다(키는 명령줄에 쓰지 않고
+`read -rs MAESTRO_ACCESS_KEY && export MAESTRO_ACCESS_KEY`). 로그인 흐름이 서버 주소 칸과 접속 키 칸이 떠 있을 때만 넣습니다
+(`.maestro/common/release_fields.yaml`). Maestro 는 넣은 값을 `~/.maestro/tests` 의 그 실행 기록에 남기므로 돌린 뒤 그 기록을 지웁니다.
+
 | 대상 | 내용 |
 |---|---|
-| 브릿지 | 접속 키(모든 경로·키 강도·프록시 거친 요청), 본문 상한, 로그인 시도 한도, 동시 실행 상한, 요청 받기 시간 제한, AI 계정·자기 자신에게 보내기 거절, 로그인 대행, 토큰 확인, SSE 중계와 끊김, RAG 꺼짐, 사람 찾기, 보내기와 보내기 기록 중계, 요약(파일 받기·20MB 경계·파일 이름은 헤더로·로그에 이름 안 남김), SSE 를 바라는 요청의 거절도 JSON |
-| 앱 | 접속 키 싣기, 토큰 암호화 저장·평문 이전, 주소 규칙(평문은 로컬 주소만), SSE 해석, 마크다운, 대화 묶음·날짜선, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB, 요약 링크 해석·계정 확인·로그인 뒤 이어 가기, 요약 진행·실패 이유·끊긴 답변, Koin 구성 |
+| 브릿지 | 접속 키(모든 경로·키 강도와 형식·프록시 거친 요청), 본문 상한, 로그인 시도 한도, 동시 실행 상한, 요청 받기 시간 제한, AI 계정·자기 자신에게 보내기 거절, 로그인 대행, 토큰 확인, SSE 중계와 끊김, RAG 꺼짐, 사람 찾기, 보내기와 보내기 기록 중계, 요약(파일 받기·20MB 경계·파일 이름은 헤더로·로그에 이름 안 남김), SSE 를 바라는 요청의 거절도 JSON |
+| 앱 | 접속 키 싣기(넣은 키는 그 서버 출처로만·리다이렉트 안 따라감)·키 형식·로그인 화면의 서버 주소 칸과 키 칸(주소 정하기 전에는 안 보냄·실패하거나 주소를 바꾸면 넣던 키 지움)·서버를 바꾸면 로그아웃, 접속 키·토큰 암호화 저장·평문 이전, 주소 규칙(평문은 로컬 주소만), SSE 해석, 마크다운, 대화 묶음·날짜선, 질문 보내기·중지·실패, 보내기 확인·실패 뒤 다시·취소, 기기 DB, 요약 링크 해석·계정 확인·로그인 뒤 이어 가기, 요약 진행·실패 이유·끊긴 답변, Koin 구성 |
 | RAG | 형식별 글 뽑기(HWP 는 테스트가 OLE 파일을 직접 만든다), 암호·스캔·깨짐·지원 안 함, 압축 폭탄·글자 상한, 나눠 요약·진행·ping·끊김, 문서·요약 속 지시 무력화(틀 표시 지우기·받는 사람 확인) |
 | 실화면 흐름 | Maestro 로 Android 에뮬레이터·iOS 시뮬레이터에서 추천 질문에 문서로 답하기(근거 칩이 꺼져 있는지까지) / Talk 로 메시지 보내기 / 요약 링크 — 같은 계정, 다른 계정에서 취소·로그아웃 뒤 로그인, 엉뚱한 계정으로 로그인 |
 
@@ -355,11 +377,12 @@ git clone https://github.com/EunilSung/Talk_Multiplatform.git ../Talk
 cd rag-server && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-`local.properties` 에 Android SDK 경로와 **브릿지 접속 키**를 둡니다. 앱 빌드와 `./gradlew :bridge:run` 이 같은 파일에서 키를 읽습니다.
+`local.properties` 에 Android SDK 경로와 **브릿지 접속 키**를 둡니다. `./gradlew :bridge:run` 이 이 키로 브릿지를 띄우고, 개발용 앱 빌드도 이 키를
+기본 키로 넣습니다(넣지 않으면 앱이 로그인 화면에서 키를 묻습니다).
 
 ```properties
 sdk.dir=<Android SDK 경로>
-# 32자 이상 무작위 값(openssl rand -base64 32). 저장소에 넣지 않고 따로 보관한다
+# 공백 없는 영문·숫자·기호 32~256자 무작위 값(openssl rand -base64 32). 저장소에 넣지 않고 따로 보관한다
 bridge.accessKey=<접속 키>
 # 앱의 기본 브릿지 주소. 비우면 에뮬레이터 http://10.0.2.2:8095, 시뮬레이터 http://localhost:8095
 bridge.baseUrl=
@@ -369,7 +392,7 @@ bridge.baseUrl=
 
 앱 빌드에서는 환경변수 `AI_AGENT_BRIDGE_KEY` · `AI_AGENT_BRIDGE_URL` 이 있으면 위 두 값보다 먼저입니다(브릿지는 `BRIDGE_ACCESS_KEY` 를 먼저 보므로,
 환경변수로 키를 바꿀 때는 두 쪽을 같은 값으로 맞춥니다). `bridge.baseUrl` 은 https 이거나 로컬 주소여야
-빌드되고, 키가 비어 있으면 경고만 하고 빌드합니다(그 앱은 브릿지가 403 으로 막습니다).
+빌드됩니다. 키가 비어 있으면 그 앱은 로그인 화면에서 접속 키를 받고, 주소까지 비어 있으면 서버 주소부터 받습니다(공개 릴리스와 같습니다).
 
 순서대로 띄웁니다. 터미널 다섯 개가 필요합니다.
 
@@ -389,7 +412,7 @@ open iosApp/iosApp.xcodeproj                               # iOS — Xcode 에�
 | 설정 (환경변수) | 기본값 | 뜻 |
 |---|---|---|
 | 브릿지 `PORT` · `HOST` | `8095` · `127.0.0.1` | 이 PC 안에서만 받는다. 에뮬레이터(10.0.2.2) · 시뮬레이터 · 터널(127.0.0.1:8095 로 붙음)은 그대로 된다 |
-| 브릿지 `BRIDGE_ACCESS_KEY` | 없음 (`:bridge:run` 은 `local.properties` 의 `bridge.accessKey` 를 넘긴다) | 없거나 32자보다 짧으면 브릿지가 뜨지 않는다. `BRIDGE_ALLOW_NO_KEY=1` 은 이 PC 안에서 프록시 없이 바로 온 요청만 받는 시험용이다 — 터널을 끈 상태에서만 쓴다 |
+| 브릿지 `BRIDGE_ACCESS_KEY` | 없음 (`:bridge:run` 은 `local.properties` 의 `bridge.accessKey` 를 넘긴다) | 없거나 공백 없는 영문 · 숫자 · 기호 32~256자가 아니면 브릿지가 뜨지 않는다. `BRIDGE_ALLOW_NO_KEY=1` 은 이 PC 안에서 프록시 없이 바로 온 요청만 받는 시험용이다 — 터널을 끈 상태에서만 쓴다 |
 | 브릿지 `ALLOWED_USER_IDS` | (비움) | 쉼표로 적은 아이디만 로그인할 수 있다. 비우면 모든 Talk 계정 |
 | 브릿지 `LOGIN_PER_IP_PER_MINUTE` · `LOGIN_GLOBAL_PER_SECOND` | `10` · `5` | 로그인 시도 한도(넘으면 429). 터널 뒤에서는 X-Forwarded-For 의 마지막 값을 주소로 본다 |
 | 브릿지 `LLM_CONCURRENCY` · `LLM_PER_USER_CONCURRENCY` | `4` · `2` | 동시에 도는 대화 · 요약의 무게 합(대화 1 · 요약 2), 전체와 사람당. 넘으면 2초 기다린 뒤 503 busy |
@@ -420,7 +443,8 @@ LLM 은 도구 호출로 "누구에게 무엇을" 만 정하고, 보내는 일�
 카드가 뜨지 않습니다.
 
 ### 4. 바깥에 여는 문은 접속 키 하나
-모든 경로에서 키를 먼저 보고(상수 시간 비교), 짧은 키로는 뜨지 않으며, 앱은 빌드 기본 주소의 호스트와 로컬 주소에만 키를 싣습니다. 여기에 경로별 본문 상한
+모든 경로에서 키를 먼저 보고(상수 시간 비교), 짧은 키로는 뜨지 않습니다. 앱은 키를 바이너리에 넣지 않고 사용자가 넣은 키를 그 서버 출처에 묶어
+그 출처로만 싣고, 리다이렉트를 따라가지 않습니다. 여기에 경로별 본문 상한
 (읽으면서 셈), 로그인 시도 한도, LLM 무게 상한, 시간당 한도, 요청 받기 30초 제한을 더해 키가 있는 사람도 서버를 독차지하지 못하게 했습니다.
 
 ### 5. 긴 문서 나눠 요약
@@ -437,14 +461,14 @@ xlsx 는 흘려 읽으며, 압축 폭탄 · 글자 수 상한을 둬 큰 파일 
 
 | 항목 | 값 |
 |---|---|
-| Kotlin 파일 | 162개 (앱 135 · 공유 3 · 브릿지 24, 테스트 포함) |
-| Kotlin 코드 라인 | 14,715줄 (앱 11,293 · 브릿지 3,110 · 공유 312) |
+| Kotlin 파일 | 165개 (앱 138 · 공유 3 · 브릿지 24, 테스트 포함) |
+| Kotlin 코드 라인 | 16,273줄 (앱 12,795 · 브릿지 3,165 · 공유 313) |
 | Python | 10개 파일 4,459줄 (서버 2,325 · 테스트 2,134) |
-| Repository 인터페이스 / UseCase | 6 / 21 |
+| Repository 인터페이스 / UseCase | 6 / 26 |
 | ViewModel / Actions | 5 / 5 |
 | 기기 DB 테이블 | 2개 |
-| 문자열 리소스 | 109개 (ko · en) |
-| 테스트 | 467개 (브릿지 80 · 앱 168 · RAG 219) + 실화면 흐름 3개 |
+| 문자열 리소스 | 120개 (ko · en) |
+| 테스트 | 513개 (브릿지 82 · 앱 212 · RAG 219) + 실화면 흐름 3개 |
 
 ---
 

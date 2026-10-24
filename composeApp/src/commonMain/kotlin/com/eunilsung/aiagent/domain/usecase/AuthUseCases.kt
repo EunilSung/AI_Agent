@@ -21,10 +21,16 @@ class LogoutUseCase(private val repository: AuthRepository) {
     suspend operator fun invoke() = repository.logout()
 }
 
-/** 로그인 화면이 쓰는 유스케이스 묶음. 로그인 전에도 서버 주소를 바꿀 수 있어야 해서 주소 유스케이스를 함께 받는다. */
+/**
+ * 로그인 화면이 쓰는 유스케이스 묶음. 로그인 전에도 서버 주소를 정하고 그 서버의 접속 키를 넣을 수 있어야 해서 주소·접속 키
+ * 유스케이스를 함께 받는다.
+ */
 data class LoginUseCases(
     val login: LoginUseCase,
     val getLastLoginId: GetLastLoginIdUseCase,
     val observeServerUrl: ObserveServerUrlUseCase,
     val setServerUrl: SetServerUrlUseCase,
+    val isServerChosen: IsServerChosenUseCase,
+    val hasAccessKey: HasAccessKeyUseCase,
+    val setAccessKey: SetAccessKeyUseCase,
 )

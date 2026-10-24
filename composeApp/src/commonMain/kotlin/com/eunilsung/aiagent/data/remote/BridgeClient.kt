@@ -1,7 +1,8 @@
 package com.eunilsung.aiagent.data.remote
 
-import com.eunilsung.aiagent.Config
+import com.eunilsung.aiagent.data.local.AccessKeyStore
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
+import com.eunilsung.aiagent.domain.util.BridgeAddress
 import com.eunilsung.aiagent.shared.api.ApiError
 import com.eunilsung.aiagent.shared.api.BRIDGE_KEY_HEADER
 import com.eunilsung.aiagent.shared.api.ChatRequest
@@ -24,6 +25,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.DEFAULT_PORT
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -49,9 +51,9 @@ sealed interface ServerResult<out T> {
 }
 
 /**
- * 앱 안에서만 쓰는 거절 code — 브릿지가 보내는 값이 아니다. 이 주소의 호스트에는 접속 키를 싣지 않았는데
- * 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절했을 때 그 code 대신 쓴다. 키가 틀린 것이 아니라 주소가 빌드 때 정한
- * 브릿지가 아니라는 뜻이라, 화면에 다른 안내를 띄운다.
+ * 앱 안에서만 쓰는 거절 code — 브릿지가 보내는 값이 아니다. 앱에 접속 키는 있지만 이 주소의 출처에 쓸 키가 없어 싣지 않았는데
+ * 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절했을 때 그 code 대신 쓴다. 키가 틀린 것이 아니라 이 서버의 키를 넣지 않았다는
+ * 뜻이라, 화면에 다른 안내를 띄운다.
  */
 internal const val ACCESS_KEY_NOT_SENT = "app_access_key_not_sent"
 
@@ -62,19 +64,18 @@ class ChatRejectedException(val status: Int, val code: String) : Exception("chat
  * 브릿지 REST·SSE 클라이언트. 주소는 부를 때마다 [urlStore] 에서 읽어, 설정에서 바꾸면 바로 반영된다.
  *
  * 모든 요청(로그인·로그아웃·연결 확인 포함)에 접속 키 헤더([BRIDGE_KEY_HEADER])를 싣는다. 브릿지는 키가 맞을 때만 받는다 —
- * 공개된 테스트 계정만 아는 바깥 사람은 브릿지에 들어오지 못한다. 키는 빌드 때 `local.properties` 의
- * `bridge.accessKey`(또는 환경변수 `AI_AGENT_BRIDGE_KEY`)에서 들어온다([Config.Bridge.ACCESS_KEY]). 비어 있으면 헤더를
- * 싣지 않고, 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절한다.
+ * 공개된 테스트 계정만 아는 바깥 사람은 브릿지에 들어오지 못한다. 키는 [accessKeys] 가 요청 주소의 출처(`스킴://호스트:포트`)마다
+ * 고른다 — 사용자가 로그인 화면에서 그 출처에 넣은 키, 아니면 빌드 때 넣은 키(빌드 기본 주소의 호스트와 로컬 주소에만). 보낼 키가
+ * 없으면 헤더를 싣지 않고, 브릿지가 [ErrorCode.CLIENT_KEY_INVALID] 로 거절한다. 리다이렉트는 따라가지 않는다(플랫폼의
+ * `HttpClient` 설정) — 따라가면 Ktor 가 키 헤더를 다른 호스트로 그대로 옮겨 싣는다.
  *
- * 키는 요청 주소의 호스트가 [accessKeyHosts](빌드 기본 주소의 호스트와 로컬 주소)일 때만 싣는다. 키는 모든 설치본이 함께 쓰는
- * 값이라, 설정에서 주소를 다른 호스트로 바꾸게 속이면 그 호스트가 브릿지 전체의 키를 받게 된다. 그런 주소에서 브릿지가 키 없음으로
- * 거절하면 [ACCESS_KEY_NOT_SENT] 로 알린다.
+ * 키가 있는데 이 주소로는 싣지 않았고 브릿지가 키 없음으로 거절하면 [ACCESS_KEY_NOT_SENT] 로 알린다 — 키가 틀린 것이 아니라
+ * 이 서버의 키를 넣지 않은 것이다.
  */
 class BridgeClient(
     private val http: HttpClient,
     private val urlStore: BridgeUrlStore,
-    private val accessKey: String = Config.Bridge.ACCESS_KEY,
-    private val accessKeyHosts: Set<String> = Config.Bridge.ACCESS_KEY_HOSTS,
+    private val accessKeys: AccessKeyStore,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val baseUrl: String get() = urlStore.url.value
@@ -165,10 +166,11 @@ class BridgeClient(
         return result ?: ServerResult.Unreachable
     }
 
-    /** 거절 응답의 code. 키를 싣지 않은 호스트가 키 없음으로 거절했으면 [ACCESS_KEY_NOT_SENT] 로 바꾼다. */
+    /** 거절 응답의 code. 키를 싣지 않은 출처가 키 없음으로 거절했으면 [ACCESS_KEY_NOT_SENT] 로 바꾼다. */
     private suspend fun HttpResponse.errorCode(): String {
         val code = runCatching { json.decodeFromString(ApiError.serializer(), bodyAsText()).code }.getOrDefault("")
-        val withheld = accessKey.isNotEmpty() && !carriesAccessKey(call.request.url.host)
+        val url = call.request.url
+        val withheld = accessKeys.hasAnyKey && accessKeys.keyFor(BridgeAddress.origin(url.protocol.name, url.host, url.port)) == null
         return if (code == ErrorCode.CLIENT_KEY_INVALID && withheld) ACCESS_KEY_NOT_SENT else code
     }
 
@@ -178,12 +180,11 @@ class BridgeClient(
         header(HttpHeaders.Authorization, "Bearer $token")
     }
 
-    /** 접속 키를 싣는다. 키가 비었거나 요청 주소의 호스트가 [accessKeyHosts] 밖이면 싣지 않는다. */
+    /** 요청 주소의 출처로 보낼 접속 키가 있으면 싣는다. 주소에 포트를 적지 않았으면 스킴의 기본 포트다. */
     private fun HttpRequestBuilder.withAccessKey() {
-        if (accessKey.isNotEmpty() && carriesAccessKey(url.host)) header(BRIDGE_KEY_HEADER, accessKey)
+        val port = url.port.takeIf { it != DEFAULT_PORT } ?: url.protocol.defaultPort
+        accessKeys.keyFor(BridgeAddress.origin(url.protocol.name, url.host, port))?.let { header(BRIDGE_KEY_HEADER, it) }
     }
-
-    private fun carriesAccessKey(host: String): Boolean = host.lowercase() in accessKeyHosts
 
     private fun HttpRequestBuilder.jsonBody(body: String) {
         contentType(ContentType.Application.Json)

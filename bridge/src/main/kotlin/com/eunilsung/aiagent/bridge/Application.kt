@@ -54,6 +54,13 @@ fun main() {
             log.error("접속 키가 ${BridgeConfig.MIN_ACCESS_KEY_LENGTH}자보다 짧아 뜨지 않는다. 길고 무작위한 키(예: openssl rand -base64 32)를 쓴다.")
             exitProcess(1)
         }
+        BridgeConfig.Startup.InvalidKey -> {
+            log.error(
+                "접속 키는 공백·한글 없이 영문·숫자·기호 ${BridgeConfig.MIN_ACCESS_KEY_LENGTH}~${BridgeConfig.MAX_ACCESS_KEY_LENGTH}자여야 뜬다 — " +
+                    "앱은 그런 키만 넣을 수 있다. 예: openssl rand -base64 32",
+            )
+            exitProcess(1)
+        }
     }
     /** LLM 답변은 조각 사이가 길 수 있어 읽기 제한을 넉넉히 둔다. 연결 제한은 짧게 둬 꺼진 서버를 빨리 알아챈다. */
     val http = HttpClient(OkHttp) {
@@ -92,11 +99,13 @@ fun bridgeServer(
 /**
  * 브릿지의 경로와 플러그인. 테스트는 가짜 HttpClient 를 끼운 [rag]·[talk] 로 같은 모듈을 띄운다.
  *
- * 접속 키가 없거나([BridgeConfig.Startup.MissingKey]) 짧은([BridgeConfig.Startup.WeakKey]) 설정으로는 띄우지 않는다.
+ * 접속 키가 없거나([BridgeConfig.Startup.MissingKey]) 짧거나([BridgeConfig.Startup.WeakKey]) 앱이 넣을 수 없는
+ * ([BridgeConfig.Startup.InvalidKey]) 설정으로는 띄우지 않는다.
  */
 fun Application.module(config: BridgeConfig, rag: RagClient, talk: TalkClient) {
     check(config.startup == BridgeConfig.Startup.Ready || config.startup == BridgeConfig.Startup.WithoutKey) {
-        "bridge access key is required and must be at least ${BridgeConfig.MIN_ACCESS_KEY_LENGTH} characters " +
+        "bridge access key is required and must be ${BridgeConfig.MIN_ACCESS_KEY_LENGTH}-${BridgeConfig.MAX_ACCESS_KEY_LENGTH} " +
+            "printable ASCII characters without spaces " +
             "(set BRIDGE_ALLOW_NO_KEY=1 to run without one on this machine only)"
     }
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; encodeDefaults = true }) }

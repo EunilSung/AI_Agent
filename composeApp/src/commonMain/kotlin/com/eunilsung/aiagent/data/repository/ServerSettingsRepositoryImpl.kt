@@ -1,21 +1,38 @@
 package com.eunilsung.aiagent.data.repository
 
+import com.eunilsung.aiagent.Config
+import com.eunilsung.aiagent.data.local.AccessKeyStore
 import com.eunilsung.aiagent.data.local.BridgeUrlStore
 import com.eunilsung.aiagent.data.mapper.bridgeRefusalOf
 import com.eunilsung.aiagent.data.remote.BridgeClient
 import com.eunilsung.aiagent.data.remote.ServerResult
 import com.eunilsung.aiagent.domain.model.ServiceStatus
 import com.eunilsung.aiagent.domain.repository.ServerSettingsRepository
+import com.eunilsung.aiagent.domain.util.BridgeAddress
 import kotlinx.coroutines.flow.StateFlow
 
 class ServerSettingsRepositoryImpl(
     private val urlStore: BridgeUrlStore,
+    private val accessKeys: AccessKeyStore,
     private val bridge: BridgeClient,
 ) : ServerSettingsRepository {
 
     override val baseUrl: StateFlow<String> = urlStore.url
 
     override fun setBaseUrl(url: String) = urlStore.set(url)
+
+    override fun defaultBaseUrl(): String? = Config.Bridge.DEFAULT_BASE_URL.takeIf { urlStore.isDefaultUsable }
+
+    override fun isServerChosen(): Boolean = urlStore.isChosen
+
+    override fun hasAccessKey(): Boolean = currentOrigin()?.let { accessKeys.keyFor(it) } != null
+
+    override fun setAccessKey(key: String) {
+        if (!urlStore.isChosen) return
+        currentOrigin()?.let { accessKeys.save(it, key) }
+    }
+
+    private fun currentOrigin(): String? = BridgeAddress.originOf(urlStore.url.value)
 
     override suspend fun status(): ServiceStatus = when (val result = bridge.health()) {
         is ServerResult.Success -> ServiceStatus(

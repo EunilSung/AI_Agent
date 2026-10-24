@@ -5,6 +5,8 @@ import aiagent.composeapp.generated.resources.setting_account
 import aiagent.composeapp.generated.resources.setting_logout
 import aiagent.composeapp.generated.resources.setting_logout_confirm
 import aiagent.composeapp.generated.resources.setting_server
+import aiagent.composeapp.generated.resources.setting_server_change_confirm
+import aiagent.composeapp.generated.resources.setting_server_change_title
 import aiagent.composeapp.generated.resources.setting_server_hint
 import aiagent.composeapp.generated.resources.setting_server_reset
 import aiagent.composeapp.generated.resources.setting_server_save
@@ -68,12 +70,21 @@ object SettingScreen : Screen {
         val viewModel: SettingViewModel = koinViewModel()
         val uiState by viewModel.uiState.collectAsState()
         val toast = LocalToastManager.current
+        val dialog = LocalDialogManager.current
+
+        /** 설정 탭을 열 때마다 주소 칸과 연결 상태를 지금에 맞춘다 — 로그아웃한 사이 로그인 화면에서 주소를 바꿨을 수 있다. */
+        LaunchedEffect(Unit) { viewModel.onAction(SettingActions.OnShown) }
 
         LaunchedEffect(viewModel) {
             viewModel.events.collect { event ->
                 when (event) {
                     SettingEvent.ServerSaved -> toast.show(getString(Res.string.toast_setting_server_saved))
                     SettingEvent.ServerInvalid -> toast.show(getString(Res.string.toast_setting_server_invalid))
+                    SettingEvent.ConfirmServerChange -> dialog.confirm(
+                        title = getString(Res.string.setting_server_change_title),
+                        message = getString(Res.string.setting_server_change_confirm),
+                        onConfirm = { viewModel.onAction(SettingActions.OnServerChangeConfirmed) },
+                    )
                 }
             }
         }
@@ -119,7 +130,9 @@ fun SettingContent(
                 )
                 Text(text = stringResource(Res.string.setting_server_hint), color = AppColors.TextHint, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ButtonV1(text = stringResource(Res.string.setting_server_reset), isSelected = false, onClick = { onAction(SettingActions.OnServerReset) })
+                    if (uiState.canResetServer) {
+                        ButtonV1(text = stringResource(Res.string.setting_server_reset), isSelected = false, onClick = { onAction(SettingActions.OnServerReset) })
+                    }
                     ButtonV1(
                         text = stringResource(Res.string.setting_server_save),
                         containerColor = if (uiState.canSaveServer) AppColors.PrimaryMain else AppColors.Gray100BgAuto,

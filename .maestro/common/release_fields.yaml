@@ -1,0 +1,41 @@
+appId: com.eunilsung.aiagent
+name: 키·주소 없이 만든 빌드면 서버 주소와 접속 키를 넣는다
+# 공개 릴리스처럼 키·주소 없이 만든 빌드만 로그인 화면에 서버 주소 칸과 접속 키 칸을 연다. 키를 넣어 만든 개발용 빌드에서는
+# 두 칸이 없어 아무것도 하지 않는다. 값은 실행할 때 환경변수로만 넘긴다 — 저장소·명령줄·셸 기록에 적지 않는다.
+# Maestro 는 MAESTRO_ 로 시작하는 환경변수를 흐름에 그대로 넘긴다.
+#   export MAESTRO_BRIDGE_URL=<브릿지 주소>; read -rs MAESTRO_ACCESS_KEY && export MAESTRO_ACCESS_KEY
+#   maestro test .maestro
+# 키보드 높이를 알려 주지 않는 에뮬레이터에서는 칸이 키보드 뒤에 가리므로 키보드를 내리고 누른다.
+---
+- runFlow:
+    when:
+      visible:
+        id: login_server
+    label: 서버 주소 칸
+    commands:
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - tapOn:
+          id: login_server
+      - inputText:
+          text: ${MAESTRO_BRIDGE_URL}
+          label: 서버 주소를 넣는다
+- runFlow:
+    when:
+      visible:
+        id: login_access_key
+    label: 접속 키 칸
+    commands:
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - tapOn:
+          id: login_access_key
+      - inputText:
+          text: ${MAESTRO_ACCESS_KEY}
+          label: 접속 키를 넣는다(값은 화면 출력에 남기지 않는다)

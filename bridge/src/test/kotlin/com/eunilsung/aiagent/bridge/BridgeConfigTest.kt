@@ -43,6 +43,22 @@ class BridgeConfigTest {
         assertEquals(BridgeConfig.Startup.Ready, BridgeConfig(accessKey = "k".repeat(minimum)).startup)
     }
 
+    /** 앱의 로그인 화면은 공백 없는 ASCII 32~256자만 넣을 수 있다. 그 밖의 키로 뜨면 공개 릴리스 앱이 영영 붙지 못한다. */
+    @Test
+    fun `앱이 넣을 수 없는 접속 키로는 뜨지 않는다`() {
+        val maximum = BridgeConfig.MAX_ACCESS_KEY_LENGTH
+        assertEquals(256, maximum)
+        assertEquals(BridgeConfig.Startup.Ready, BridgeConfig(accessKey = "k".repeat(maximum)).startup)
+        assertEquals(BridgeConfig.Startup.Ready, BridgeConfig(accessKey = "+/=-_~!@#\$%^&*()[]{}<>?.,;:0123456789").startup)
+        val refused = listOf(
+            "k".repeat(maximum + 1),
+            "has space in the middle of the key 0123",
+            "한글이-섞인-접속-키-0123456789-abcdefghij",
+            "tab\tinside-the-key-0123456789-abcdefghij",
+        )
+        refused.forEach { assertEquals(BridgeConfig.Startup.InvalidKey, BridgeConfig(accessKey = it).startup, it) }
+    }
+
     @Test
     fun `설정을 글로 찍어도 접속 키는 남지 않는다`() {
         val text = BridgeConfig(accessKey = "fake-secret-value").toString()
