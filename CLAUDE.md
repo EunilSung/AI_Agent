@@ -95,7 +95,7 @@ maestro --device <시뮬레이터 UDID> test .maestro -e SUMMARY_FILE_ID=<id> -e
 
 - **동작 확인은 에뮬레이터·시뮬레이터에서 한다.** 실기기는 사용자가 요청했을 때만 쓴다. adb 는 `-s emulator-5554` 처럼 기기를 꼭 고른다.
 - **메시지 보내기는 Talk 에 실제로 들어갔는지까지 본다.** 흐름이 끝나면 test2 로 Talk 서버에 로그인해 test1 과의 방 마지막 대화를 읽는다
-  (`README.md` 의 검증 절차).
+  (`README.md` 의 "테스트" 절).
 - iOS 한글 입력은 자동화가 안 된다. 실화면 흐름은 추천 질문 버튼으로 한글 질문을 보낸다.
 - 요약 흐름(03)은 test1–test2 1:1 방에 올린 Talk 파일이 필요하다. 상대(test2)가 REST 로 파일을 올리고(`POST /rooms/{방}/files?name=`
   → `POST /rooms/{방}/messages` kind=file) 그 id 를 넘긴다. iOS 는 팝업이 떠 있는 동안 뒤 화면을 계층에서 숨기므로 팝업을 닫은 뒤 본다.

@@ -1,5 +1,5 @@
 # 고정 주소 터널 설정 예시. config.yml 로 복사해 <...> 를 채운다(config.yml 은 저장소에 올리지 않는다).
-# 순서는 README 의 "외부 접속 (Cloudflare Tunnel)" 을 따른다.
+# 순서는 README "외부 접속" 절의 "고정 주소 — Cloudflare Tunnel" 을 따른다.
 tunnel: <터널 UUID>
 credentials-file: /Users/<사용자>/.cloudflared/<터널 UUID>.json
 
